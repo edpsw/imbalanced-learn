@@ -5,7 +5,7 @@ from scipy import sparse
 
 from sklearn.datasets import load_iris
 
-keras = pytest.importorskip("keras")
+keras = pytest.importorskip("tensorflow.keras")
 from keras.models import Sequential  # noqa: E402
 from keras.layers import Dense  # noqa: E402
 from keras.utils import to_categorical  # noqa: E402
