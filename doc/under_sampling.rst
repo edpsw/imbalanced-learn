@@ -6,7 +6,25 @@ Under-sampling
 
 .. currentmodule:: imblearn.under_sampling
 
-You can refer to
+One way of handling imbalanced datasets is to reduce the number of observations from
+all classes but the minority class. The minority class is that with the least number
+of observations. The most well known algorithm in this group is random
+undersampling, where samples from the targeted classes are removed at random.
+
+But there are many other algorithms to help us reduce the number of observations in the
+dataset. These algorithms can be grouped based on their undersampling strategy into:
+
+- Prototype generation methods.
+- Prototype selection methods.
+
+And within the latter, we find:
+
+- Controlled undersampling
+- Cleaning methods
+
+We will discuss the different algorithms throughout this document.
+
+Check also
 :ref:`sphx_glr_auto_examples_under-sampling_plot_comparison_under_sampling.py`.
 
 .. _cluster_centroids:
@@ -16,7 +34,7 @@ Prototype generation
 
 Given an original data set :math:`S`, prototype generation algorithms will
 generate a new set :math:`S'` where :math:`|S'| < |S|` and :math:`S' \not\subset
-S`. In other words, prototype generation technique will reduce the number of
+S`. In other words, prototype generation techniques will reduce the number of
 samples in the targeted classes but the remaining samples are generated --- and
 not selected --- from the original set.
 
@@ -61,21 +79,33 @@ original one.
 Prototype selection
 ===================
 
-On the contrary to prototype generation algorithms, prototype selection
-algorithms will select samples from the original set :math:`S`. Therefore,
-:math:`S'` is defined such as :math:`|S'| < |S|` and :math:`S' \in S`.
+Prototype selection algorithms will select samples from the original set :math:`S`,
+generating a dataset :math:`S'`, where :math:`|S'| < |S|` and :math:`S' \subset S`. In
+other words, :math:`S'` is a subset of :math:`S`.
 
-In addition, these algorithms can be divided into two groups: (i) the
-controlled under-sampling techniques and (ii) the cleaning under-sampling
-techniques. The first group of methods allows for an under-sampling strategy in
-which the number of samples in :math:`S'` is specified by the user. By
-contrast, cleaning under-sampling techniques do not allow this specification
-and are meant for cleaning the feature space.
+Prototype selection algorithms can be divided into two groups: (i) controlled
+under-sampling techniques and (ii) cleaning under-sampling techniques.
+
+Controlled under-sampling methods reduce the number of observations in the majority
+class or classes to an arbitrary number of samples specified by the user. Typically,
+they reduce the number of observations to the number of samples observed in the
+minority class.
+
+In contrast, cleaning under-sampling techniques "clean" the feature space by removing
+either "noisy" or "too easy to classify" observations, depending on the method. The
+final number of observations in each class varies with the cleaning method and can't be
+specified by the user.
 
 .. _controlled_under_sampling:
 
 Controlled under-sampling techniques
 ------------------------------------
+
+Controlled under-sampling techniques reduce the number of observations from the
+targeted classes to a number specified by the user.
+
+Random under-sampling
+^^^^^^^^^^^^^^^^^^^^^
 
 :class:`RandomUnderSampler` is a fast and easy way to balance the data by
 randomly selecting a subset of data for the targeted classes::
@@ -91,9 +121,9 @@ randomly selecting a subset of data for the targeted classes::
    :scale: 60
    :align: center
 
-:class:`RandomUnderSampler` allows to bootstrap the data by setting
-``replacement`` to ``True``. The resampling with multiple classes is performed
-by considering independently each targeted class::
+:class:`RandomUnderSampler` allows bootstrapping the data by setting
+``replacement`` to ``True``. When there are multiple classes, each targeted class is
+under-sampled independently::
 
   >>> import numpy as np
   >>> print(np.vstack([tuple(row) for row in X_resampled]).shape)
@@ -103,8 +133,8 @@ by considering independently each targeted class::
   >>> print(np.vstack(np.unique([tuple(row) for row in X_resampled], axis=0)).shape)
   (181, 2)
 
-In addition, :class:`RandomUnderSampler` allows to sample heterogeneous data
-(e.g. containing some strings)::
+:class:`RandomUnderSampler` handles heterogeneous data types, i.e. numerical,
+categorical, dates, etc.::
 
   >>> X_hetero = np.array([['xxx', 1, 1.0], ['yyy', 2, 2.0], ['zzz', 3, 3.0]],
   ...                     dtype=object)
@@ -116,7 +146,8 @@ In addition, :class:`RandomUnderSampler` allows to sample heterogeneous data
   >>> print(y_resampled)
   [0 1]
 
-It would also work with pandas dataframe::
+:class:`RandomUnderSampler` also supports pandas dataframes as input for
+undersampling::
 
   >>> from sklearn.datasets import fetch_openml
   >>> df_adult, y_adult = fetch_openml(
@@ -197,38 +228,49 @@ affected by noise due to the first step sample selection.
 Cleaning under-sampling techniques
 ----------------------------------
 
-Cleaning under-sampling techniques do not allow to specify the number of
-samples to have in each class. In fact, each algorithm implement an heuristic
-which will clean the dataset.
+Cleaning under-sampling methods "clean" the feature space by removing
+either "noisy" observations or observations that are "too easy to classify", depending
+on the method. The final number of observations in each targeted class varies with the
+cleaning method and cannot be specified by the user.
 
 .. _tomek_links:
 
 Tomek's links
 ^^^^^^^^^^^^^
 
-:class:`TomekLinks` detects the so-called Tomek's links :cite:`tomek1976two`. A
-Tomek's link between two samples of different class :math:`x` and :math:`y` is
-defined such that for any sample :math:`z`:
+A Tomek's link exists when two samples from different classes are closest neighbors to
+each other.
+
+Mathematically, a Tomek's link between two samples from different classes :math:`x`
+and :math:`y` is defined such that for any sample :math:`z`:
 
 .. math::
 
    d(x, y) < d(x, z) \text{ and } d(x, y) < d(y, z)
 
-where :math:`d(.)` is the distance between the two samples. In some other
-words, a Tomek's link exist if the two samples are the nearest neighbors of
-each other. In the figure below, a Tomek's link is illustrated by highlighting
-the samples of interest in green.
+where :math:`d(.)` is the distance between the two samples.
+
+:class:`TomekLinks` detects and removes Tomek's links :cite:`tomek1976two`. The
+underlying idea is that Tomek's links are noisy or hard to classify observations and
+would not help the algorithm find a suitable discrimination boundary.
+
+In the following figure, a Tomek's link between an observation of class :math:`+` and
+class :math:`-` is highlighted in green:
 
 .. image:: ./auto_examples/under-sampling/images/sphx_glr_plot_illustration_tomek_links_001.png
    :target: ./auto_examples/under-sampling/plot_illustration_tomek_links.html
    :scale: 60
    :align: center
 
-The parameter ``sampling_strategy`` control which sample of the link will be
-removed. For instance, the default (i.e., ``sampling_strategy='auto'``) will
-remove the sample from the majority class. Both samples from the majority and
-minority class can be removed by setting ``sampling_strategy`` to ``'all'``. The
-figure illustrates this behaviour.
+When :class:`TomekLinks` finds a Tomek's link, it can either remove the sample of the
+majority class, or both. The parameter ``sampling_strategy`` controls which samples
+from the link will be removed. By default (i.e., ``sampling_strategy='auto'``), it will
+remove the sample from the majority class. Both samples, that is that from the majority
+and the one from the minority class, can be removed by setting ``sampling_strategy`` to
+``'all'``.
+
+The following figure illustrates this behaviour: on the left, only the sample from the
+majority class is removed, whereas on the right, the entire Tomek's link is removed.
 
 .. image:: ./auto_examples/under-sampling/images/sphx_glr_plot_illustration_tomek_links_002.png
    :target: ./auto_examples/under-sampling/plot_illustration_tomek_links.html
@@ -237,14 +279,23 @@ figure illustrates this behaviour.
 
 .. _edited_nearest_neighbors:
 
-Edited data set using nearest neighbours
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Editing data using nearest neighbours
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-:class:`EditedNearestNeighbours` applies a nearest-neighbors algorithm and
-"edit" the dataset by removing samples which do not agree "enough" with their
-neighboorhood :cite:`wilson1972asymptotic`. For each sample in the class to be
-under-sampled, the nearest-neighbours are computed and if the selection
-criterion is not fulfilled, the sample is removed::
+Edited nearest neighbours
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The edited nearest neighbours methodology uses K-Nearest Neighbours to identify the
+neighbours of the targeted class samples, and then removes observations if any or most
+of their neighbours are from a different class :cite:`wilson1972asymptotic`.
+
+:class:`EditedNearestNeighbours` carries out the following steps:
+
+1. Train a K-Nearest neighbours using the entire dataset.
+2. Find each observations' K closest neighbours (only for the targeted classes).
+3. Remove observations if any or most of its neighbours belong to a different class.
+
+Below the code implementation::
 
   >>> sorted(Counter(y).items())
   [(0, 64), (1, 262), (2, 4674)]
@@ -254,12 +305,12 @@ criterion is not fulfilled, the sample is removed::
   >>> print(sorted(Counter(y_resampled).items()))
   [(0, 64), (1, 213), (2, 4568)]
 
-Two selection criteria are currently available: (i) the majority (i.e.,
-``kind_sel='mode'``) or (ii) all (i.e., ``kind_sel='all'``) the
-nearest-neighbors have to belong to the same class than the sample inspected to
-keep it in the dataset. Thus, it implies that `kind_sel='all'` will be less
-conservative than `kind_sel='mode'`, and more samples will be excluded in
-the former strategy than the latest::
+
+To paraphrase step 3, :class:`EditedNearestNeighbours` will retain observations from
+the majority class when **most**, or **all** of its neighbours are from the same class.
+To control this behaviour we set ``kind_sel='mode'`` or ``kind_sel='all'``,
+respectively. Hence, `kind_sel='all'` is less conservative than `kind_sel='mode'`,
+resulting in the removal of more samples::
 
   >>> enn = EditedNearestNeighbours(kind_sel="all")
   >>> X_resampled, y_resampled = enn.fit_resample(X, y)
@@ -270,9 +321,15 @@ the former strategy than the latest::
   >>> print(sorted(Counter(y_resampled).items()))
   [(0, 64), (1, 234), (2, 4666)]
 
-The parameter ``n_neighbors`` allows to give a classifier subclassed from
-``KNeighborsMixin`` from scikit-learn to find the nearest neighbors and make
-the decision to keep a given sample or not.
+The parameter ``n_neighbors`` accepts integers. The integer refers to the number of
+neighbours to examine for each sample. It can also take a classifier subclassed from
+``KNeighborsMixin`` from scikit-learn. When passing a classifier, note that, if you
+pass a 3-Nearest Neighbors classifier, only 2 neighbours will be examined for the cleaning, as the
+third sample is the one being examined for undersampling since it is part of the
+samples provided at `fit`.
+
+Repeated Edited Nearest Neighbours
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 :class:`RepeatedEditedNearestNeighbours` extends
 :class:`EditedNearestNeighbours` by repeating the algorithm multiple times
@@ -285,9 +342,23 @@ more data::
    >>> print(sorted(Counter(y_resampled).items()))
    [(0, 64), (1, 208), (2, 4551)]
 
-:class:`AllKNN` differs from the previous
-:class:`RepeatedEditedNearestNeighbours` since the number of neighbors of the
-internal nearest neighbors algorithm is increased at each iteration
+The user can set up the number of times the edited nearest neighbours method should be
+repeated through the parameter `max_iter`.
+
+The repetitions will stop when:
+
+1. the maximum number of iterations is reached, or
+2. no more observations are removed, or
+3. one of the majority classes becomes a minority class, or
+4. one of the majority classes disappears during the undersampling.
+
+All KNN
+~~~~~~~
+
+:class:`AllKNN` is a variation of the
+:class:`RepeatedEditedNearestNeighbours` where the number of neighbours evaluated at
+each round of :class:`EditedNearestNeighbours` increases. It starts by editing based on
+1-Nearest Neighbour, and it increases the neighbourhood by 1 at each iteration
 :cite:`tomek1976experiment`::
 
   >>> from imblearn.under_sampling import AllKNN
@@ -296,8 +367,13 @@ internal nearest neighbors algorithm is increased at each iteration
   >>> print(sorted(Counter(y_resampled).items()))
   [(0, 64), (1, 220), (2, 4601)]
 
-In the example below, it can be seen that the three algorithms have similar
-impact by cleaning noisy samples next to the boundaries of the classes.
+:class:`AllKNN` stops cleaning when the maximum number of neighbours to examine, which
+is determined by the user through the parameter `n_neighbors` is reached, or when the
+majority class becomes the minority class.
+
+In the example below, we see that :class:`EditedNearestNeighbours`,
+:class:`RepeatedEditedNearestNeighbours` and :class:`AllKNN` have similar impact when
+cleaning "noisy" samples at the boundaries between classes.
 
 .. image:: ./auto_examples/under-sampling/images/sphx_glr_plot_comparison_under_sampling_004.png
    :target: ./auto_examples/under-sampling/plot_comparison_under_sampling.html
@@ -306,20 +382,25 @@ impact by cleaning noisy samples next to the boundaries of the classes.
 
 .. _condensed_nearest_neighbors:
 
-Condensed nearest neighbors and derived algorithms
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Condensed nearest neighbors
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 :class:`CondensedNearestNeighbour` uses a 1 nearest neighbor rule to
-iteratively decide if a sample should be removed or not
-:cite:`hart1968condensed`. The algorithm is running as followed:
+iteratively decide if a sample should be removed
+:cite:`hart1968condensed`. The algorithm runs as follows:
 
 1. Get all minority samples in a set :math:`C`.
 2. Add a sample from the targeted class (class to be under-sampled) in
    :math:`C` and all other samples of this class in a set :math:`S`.
-3. Go through the set :math:`S`, sample by sample, and classify each sample
-   using a 1 nearest neighbor rule.
-4. If the sample is misclassified, add it to :math:`C`, otherwise do nothing.
-5. Reiterate on :math:`S` until there is no samples to be added.
+3. Train a 1-Nearest Neigbhour on :math:`C`.
+4. Go through the samples in set :math:`S`, sample by sample, and classify each one
+   using a 1 nearest neighbor rule (trained in 3).
+5. If the sample is misclassified, add it to :math:`C`, and go to step 6.
+6. Repeat steps 3 to 5 until all observations in :math:`S` have been examined.
+
+The final dataset is :math:`S`, containing all observations from the minority class and
+those from the majority that were miss-classified by the successive
+1-Nearest Neigbhour algorithms.
 
 The :class:`CondensedNearestNeighbour` can be used in the following manner::
 
@@ -329,14 +410,35 @@ The :class:`CondensedNearestNeighbour` can be used in the following manner::
   >>> print(sorted(Counter(y_resampled).items()))
   [(0, 64), (1, 24), (2, 115)]
 
-However as illustrated in the figure below, :class:`CondensedNearestNeighbour`
-is sensitive to noise and will add noisy samples.
+:class:`CondensedNearestNeighbour` is sensitive to noise and may add noisy samples
+(see figure later on).
 
-In the contrary, :class:`OneSidedSelection` will use :class:`TomekLinks` to
-remove noisy samples :cite:`hart1968condensed`. In addition, the 1 nearest
-neighbor rule is applied to all samples and the one which are misclassified
-will be added to the set :math:`C`. No iteration on the set :math:`S` will take
-place. The class can be used as::
+One Sided Selection
+~~~~~~~~~~~~~~~~~~~
+
+In an attempt to remove the noisy observations introduced by
+:class:`CondensedNearestNeighbour`, :class:`OneSidedSelection`
+will first find the observations that are hard to classify, and then will use
+:class:`TomekLinks` to remove noisy samples :cite:`hart1968condensed`.
+:class:`OneSidedSelection` runs as follows:
+
+1. Get all minority samples in a set :math:`C`.
+2. Add a sample from the targeted class (class to be under-sampled) in
+   :math:`C` and all other samples of this class in a set :math:`S`.
+3. Train a 1-Nearest Neighbors on :math:`C`.
+4. Using a 1 nearest neighbor rule trained in 3, classify all samples in
+   set :math:`S`.
+5. Add all misclassified samples to :math:`C`.
+6. Remove Tomek Links from :math:`C`.
+
+The final dataset is :math:`S`, containing all observations from the minority class,
+plus the observations from the majority that were added at random, plus all
+those from the majority that were miss-classified by the 1-Nearest Neighbors algorithms.
+
+Note that differently from :class:`CondensedNearestNeighbour`, :class:`OneSidedSelection`
+does not train a K-Nearest Neighbors after each sample is misclassified. It uses the
+1-Nearest Neighbors from step 3 to classify all samples from the majority in 1 pass.
+The class can be used as::
 
   >>> from imblearn.under_sampling import OneSidedSelection
   >>> oss = OneSidedSelection(random_state=0)
@@ -344,8 +446,8 @@ place. The class can be used as::
   >>> print(sorted(Counter(y_resampled).items()))
   [(0, 64), (1, 174), (2, 4404)]
 
-Our implementation offer to set the number of seeds to put in the set :math:`C`
-originally by setting the parameter ``n_seeds_S``.
+Our implementation offers the possibility to set the number of observations
+to put at random in the set :math:`C` through the parameter ``n_seeds_S``.
 
 :class:`NeighbourhoodCleaningRule` will focus on cleaning the data than
 condensing them :cite:`laurikkala2001improving`. Therefore, it will used the
@@ -353,10 +455,10 @@ union of samples to be rejected between the :class:`EditedNearestNeighbours`
 and the output a 3 nearest neighbors classifier. The class can be used as::
 
   >>> from imblearn.under_sampling import NeighbourhoodCleaningRule
-  >>> ncr = NeighbourhoodCleaningRule()
+  >>> ncr = NeighbourhoodCleaningRule(n_neighbors=11)
   >>> X_resampled, y_resampled = ncr.fit_resample(X, y)
   >>> print(sorted(Counter(y_resampled).items()))
-  [(0, 64), (1, 234), (2, 4666)]
+  [(0, 64), (1, 193), (2, 4535)]
 
 .. image:: ./auto_examples/under-sampling/images/sphx_glr_plot_comparison_under_sampling_005.png
    :target: ./auto_examples/under-sampling/plot_comparison_under_sampling.html
@@ -365,34 +467,53 @@ and the output a 3 nearest neighbors classifier. The class can be used as::
 
 .. _instance_hardness_threshold:
 
+Additional undersampling techniques
+-----------------------------------
+
 Instance hardness threshold
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-:class:`InstanceHardnessThreshold` is a specific algorithm in which a
-classifier is trained on the data and the samples with lower probabilities are
-removed :cite:`smith2014instance`. The class can be used as::
+**Instance Hardness** is a measure of how difficult it is to classify an instance or
+observation correctly. In other words, hard instances are observations that are hard to
+classify correctly.
+
+Fundamentally, instances that are hard to classify correctly are those for which the
+learning algorithm or classifier produces a low probability of predicting the correct
+class label.
+
+If we removed these hard instances from the dataset, the logic goes, we would help the
+classifier better identify the different classes :cite:`smith2014instance`.
+
+:class:`InstanceHardnessThreshold` trains a classifier on the data and then removes the
+samples with lower probabilities :cite:`smith2014instance`. Or in other words, it
+retains the observations with the higher class probabilities.
+
+In our implementation, :class:`InstanceHardnessThreshold` is (almost) a controlled
+under-sampling method: it will retain a specific number of observations of the target
+class(es), which is specified by the user (see caveat below).
+
+The class can be used as::
 
   >>> from sklearn.linear_model import LogisticRegression
   >>> from imblearn.under_sampling import InstanceHardnessThreshold
   >>> iht = InstanceHardnessThreshold(random_state=0,
-  ...                                 estimator=LogisticRegression(
-  ...                                     solver='lbfgs', multi_class='auto'))
+  ...                                 estimator=LogisticRegression())
   >>> X_resampled, y_resampled = iht.fit_resample(X, y)
   >>> print(sorted(Counter(y_resampled).items()))
   [(0, 64), (1, 64), (2, 64)]
 
-This class has 2 important parameters. ``estimator`` will accept any
-scikit-learn classifier which has a method ``predict_proba``. The classifier
-training is performed using a cross-validation and the parameter ``cv`` can set
-the number of folds to use.
+:class:`InstanceHardnessThreshold` has 2 important parameters. The parameter
+``estimator`` accepts any scikit-learn classifier with a method ``predict_proba``.
+This classifier will be used to identify the hard instances. The training is performed
+with cross-validation which can be specified through the parameter ``cv`.
 
 .. note::
 
    :class:`InstanceHardnessThreshold` could almost be considered as a
    controlled under-sampling method. However, due to the probability outputs, it
-   is not always possible to get a specific number of samples.
+   is not always possible to get the specified number of samples.
 
-The figure below gives another examples on some toy data.
+The figure below shows examples of instance hardness undersampling on a toy dataset.
 
 .. image:: ./auto_examples/under-sampling/images/sphx_glr_plot_comparison_under_sampling_006.png
    :target: ./auto_examples/under-sampling/plot_comparison_under_sampling.html

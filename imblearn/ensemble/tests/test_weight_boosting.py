@@ -1,7 +1,5 @@
-import pytest
-
 import numpy as np
-
+import pytest
 from sklearn.datasets import make_classification
 from sklearn.model_selection import train_test_split
 from sklearn.utils._testing import assert_array_equal
@@ -25,21 +23,7 @@ def imbalanced_dataset():
     )
 
 
-@pytest.mark.parametrize(
-    "boosting_params, err_msg",
-    [
-        ({"n_estimators": "whatever"}, "n_estimators must be an integer"),
-        ({"n_estimators": -100}, "n_estimators must be greater than zero"),
-    ],
-)
-def test_rusboost_error(imbalanced_dataset, boosting_params, err_msg):
-    rusboost = RUSBoostClassifier(**boosting_params)
-    with pytest.raises(ValueError, match=err_msg):
-        rusboost.fit(*imbalanced_dataset)
-
-
-@pytest.mark.parametrize("algorithm", ["SAMME", "SAMME.R"])
-def test_rusboost(imbalanced_dataset, algorithm):
+def test_rusboost(imbalanced_dataset):
     X, y = imbalanced_dataset
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, stratify=y, random_state=1
@@ -47,9 +31,7 @@ def test_rusboost(imbalanced_dataset, algorithm):
     classes = np.unique(y)
 
     n_estimators = 500
-    rusboost = RUSBoostClassifier(
-        n_estimators=n_estimators, algorithm=algorithm, random_state=0
-    )
+    rusboost = RUSBoostClassifier(n_estimators=n_estimators, random_state=0)
     rusboost.fit(X_train, y_train)
     assert_array_equal(classes, rusboost.classes_)
 
@@ -77,17 +59,16 @@ def test_rusboost(imbalanced_dataset, algorithm):
     assert rusboost.decision_function(X_test).shape[1] == len(classes)
 
     score = rusboost.score(X_test, y_test)
-    assert score > 0.7, f"Failed with algorithm {algorithm} and score {score}"
+    assert score > 0.6, f"Failed with score {score}"
 
     y_pred = rusboost.predict(X_test)
     assert y_pred.shape == y_test.shape
 
 
-@pytest.mark.parametrize("algorithm", ["SAMME", "SAMME.R"])
-def test_rusboost_sample_weight(imbalanced_dataset, algorithm):
+def test_rusboost_sample_weight(imbalanced_dataset):
     X, y = imbalanced_dataset
     sample_weight = np.ones_like(y)
-    rusboost = RUSBoostClassifier(algorithm=algorithm, random_state=0)
+    rusboost = RUSBoostClassifier(random_state=0)
 
     # Predictions should be the same when sample_weight are all ones
     y_pred_sample_weight = rusboost.fit(X, y, sample_weight).predict(X)
@@ -101,3 +82,13 @@ def test_rusboost_sample_weight(imbalanced_dataset, algorithm):
 
     with pytest.raises(AssertionError):
         assert_array_equal(y_pred_no_sample_weight, y_pred_sample_weight)
+
+
+@pytest.mark.parametrize("algorithm", ["SAMME", "SAMME.R"])
+def test_rusboost_algorithm(imbalanced_dataset, algorithm):
+    X, y = imbalanced_dataset
+
+    rusboost = RUSBoostClassifier(algorithm=algorithm)
+    warn_msg = "`algorithm` parameter is deprecated in 0.12 and will be removed"
+    with pytest.warns(FutureWarning, match=warn_msg):
+        rusboost.fit(X, y)

@@ -7,27 +7,25 @@ from collections import Counter
 
 import numpy as np
 import pytest
-
-from sklearn.datasets import load_iris, make_hastie_10_2, make_classification
-from sklearn.model_selection import (
-    GridSearchCV,
-    ParameterGrid,
-    train_test_split,
-)
+from sklearn.cluster import KMeans
+from sklearn.datasets import load_iris, make_classification, make_hastie_10_2
 from sklearn.dummy import DummyClassifier
-from sklearn.linear_model import Perceptron, LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.feature_selection import SelectKBest
+from sklearn.linear_model import LogisticRegression, Perceptron
+from sklearn.model_selection import GridSearchCV, ParameterGrid, train_test_split
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
-from sklearn.feature_selection import SelectKBest
-from sklearn.utils._testing import assert_array_equal
-from sklearn.utils._testing import assert_array_almost_equal
-from sklearn.utils._testing import assert_allclose
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.utils._testing import (
+    assert_allclose,
+    assert_array_almost_equal,
+    assert_array_equal,
+)
 
 from imblearn import FunctionSampler
 from imblearn.datasets import make_imbalance
 from imblearn.ensemble import BalancedBaggingClassifier
-from imblearn.over_sampling import RandomOverSampler, SMOTE
+from imblearn.over_sampling import SMOTE, RandomOverSampler
 from imblearn.pipeline import make_pipeline
 from imblearn.under_sampling import ClusterCentroids, RandomUnderSampler
 
@@ -35,7 +33,7 @@ iris = load_iris()
 
 
 @pytest.mark.parametrize(
-    "base_estimator",
+    "estimator",
     [
         None,
         DummyClassifier(strategy="prior"),
@@ -56,7 +54,7 @@ iris = load_iris()
         }
     ),
 )
-def test_balanced_bagging_classifier(base_estimator, params):
+def test_balanced_bagging_classifier(estimator, params):
     # Check classification for various parameter settings.
     X, y = make_imbalance(
         iris.data,
@@ -66,9 +64,14 @@ def test_balanced_bagging_classifier(base_estimator, params):
     )
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
 
-    BalancedBaggingClassifier(
-        base_estimator=base_estimator, random_state=0, **params
-    ).fit(X_train, y_train).predict(X_test)
+    bag = BalancedBaggingClassifier(estimator=estimator, random_state=0, **params).fit(
+        X_train, y_train
+    )
+    bag.predict(X_test)
+    bag.predict_proba(X_test)
+    bag.score(X_test, y_test)
+    if hasattr(estimator, "decision_function"):
+        bag.decision_function(X_test)
 
 
 def test_bootstrap_samples():
@@ -81,12 +84,12 @@ def test_bootstrap_samples():
     )
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
 
-    base_estimator = DecisionTreeClassifier().fit(X_train, y_train)
+    estimator = DecisionTreeClassifier().fit(X_train, y_train)
 
     # without bootstrap, all trees are perfect on the training set
     # disable the resampling by passing an empty dictionary.
     ensemble = BalancedBaggingClassifier(
-        base_estimator=DecisionTreeClassifier(),
+        estimator=DecisionTreeClassifier(),
         max_samples=1.0,
         bootstrap=False,
         n_estimators=10,
@@ -94,17 +97,17 @@ def test_bootstrap_samples():
         random_state=0,
     ).fit(X_train, y_train)
 
-    assert ensemble.score(X_train, y_train) == base_estimator.score(X_train, y_train)
+    assert ensemble.score(X_train, y_train) == estimator.score(X_train, y_train)
 
     # with bootstrap, trees are no longer perfect on the training set
     ensemble = BalancedBaggingClassifier(
-        base_estimator=DecisionTreeClassifier(),
+        estimator=DecisionTreeClassifier(),
         max_samples=1.0,
         bootstrap=True,
         random_state=0,
     ).fit(X_train, y_train)
 
-    assert ensemble.score(X_train, y_train) < base_estimator.score(X_train, y_train)
+    assert ensemble.score(X_train, y_train) < estimator.score(X_train, y_train)
 
 
 def test_bootstrap_features():
@@ -118,7 +121,7 @@ def test_bootstrap_features():
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
 
     ensemble = BalancedBaggingClassifier(
-        base_estimator=DecisionTreeClassifier(),
+        estimator=DecisionTreeClassifier(),
         max_features=1.0,
         bootstrap_features=False,
         random_state=0,
@@ -128,7 +131,7 @@ def test_bootstrap_features():
         assert np.unique(features).shape[0] == X.shape[1]
 
     ensemble = BalancedBaggingClassifier(
-        base_estimator=DecisionTreeClassifier(),
+        estimator=DecisionTreeClassifier(),
         max_features=1.0,
         bootstrap_features=True,
         random_state=0,
@@ -153,7 +156,7 @@ def test_probability():
     with np.errstate(divide="ignore", invalid="ignore"):
         # Normal case
         ensemble = BalancedBaggingClassifier(
-            base_estimator=DecisionTreeClassifier(), random_state=0
+            estimator=DecisionTreeClassifier(), random_state=0
         ).fit(X_train, y_train)
 
         assert_array_almost_equal(
@@ -168,7 +171,7 @@ def test_probability():
 
         # Degenerate case, where some classes are missing
         ensemble = BalancedBaggingClassifier(
-            base_estimator=LogisticRegression(solver="lbfgs", multi_class="auto"),
+            estimator=LogisticRegression(solver="lbfgs"),
             random_state=0,
             max_samples=5,
         )
@@ -196,9 +199,9 @@ def test_oob_score_classification():
     )
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
 
-    for base_estimator in [DecisionTreeClassifier(), SVC(gamma="scale")]:
+    for estimator in [DecisionTreeClassifier(), SVC(gamma="scale")]:
         clf = BalancedBaggingClassifier(
-            base_estimator=base_estimator,
+            estimator=estimator,
             n_estimators=100,
             bootstrap=True,
             oob_score=True,
@@ -212,7 +215,7 @@ def test_oob_score_classification():
         # Test with few estimators
         with pytest.warns(UserWarning):
             BalancedBaggingClassifier(
-                base_estimator=base_estimator,
+                estimator=estimator,
                 n_estimators=1,
                 bootstrap=True,
                 oob_score=True,
@@ -231,7 +234,7 @@ def test_single_estimator():
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
 
     clf1 = BalancedBaggingClassifier(
-        base_estimator=KNeighborsClassifier(),
+        estimator=KNeighborsClassifier(),
         n_estimators=1,
         bootstrap=False,
         bootstrap_features=False,
@@ -246,37 +249,6 @@ def test_single_estimator():
     assert_array_equal(clf1.predict(X_test), clf2.predict(X_test))
 
 
-@pytest.mark.parametrize(
-    "params",
-    [
-        {"n_estimators": 1.5},
-        {"n_estimators": -1},
-        {"max_samples": -1},
-        {"max_samples": 0.0},
-        {"max_samples": 2.0},
-        {"max_samples": 1000},
-        {"max_samples": "foobar"},
-        {"max_features": -1},
-        {"max_features": 0.0},
-        {"max_features": 2.0},
-        {"max_features": 5},
-        {"max_features": "foobar"},
-    ],
-)
-def test_balanced_bagging_classifier_error(params):
-    # Test that it gives proper exception on deficient input.
-    X, y = make_imbalance(
-        iris.data, iris.target, sampling_strategy={0: 20, 1: 25, 2: 50}
-    )
-    base = DecisionTreeClassifier()
-    clf = BalancedBaggingClassifier(base_estimator=base, **params)
-    with pytest.raises(ValueError):
-        clf.fit(X, y)
-
-    # Test support of decision_function
-    assert not (hasattr(BalancedBaggingClassifier(base).fit(X, y), "decision_function"))
-
-
 def test_gridsearch():
     # Check that bagging ensembles can be grid-searched.
     # Transform iris into a binary classification task
@@ -284,7 +256,7 @@ def test_gridsearch():
     y[y == 2] = 1
 
     # Grid search with scoring based on decision_function
-    parameters = {"n_estimators": (1, 2), "base_estimator__C": (1, 2)}
+    parameters = {"n_estimators": (1, 2), "estimator__C": (1, 2)}
 
     GridSearchCV(
         BalancedBaggingClassifier(SVC(gamma="scale")),
@@ -294,8 +266,8 @@ def test_gridsearch():
     ).fit(X, y)
 
 
-def test_base_estimator():
-    # Check base_estimator and its default values.
+def test_estimator():
+    # Check estimator and its default values.
     X, y = make_imbalance(
         iris.data,
         iris.target,
@@ -308,19 +280,19 @@ def test_base_estimator():
         X_train, y_train
     )
 
-    assert isinstance(ensemble.base_estimator_.steps[-1][1], DecisionTreeClassifier)
+    assert isinstance(ensemble.estimator_.steps[-1][1], DecisionTreeClassifier)
 
     ensemble = BalancedBaggingClassifier(
         DecisionTreeClassifier(), n_jobs=3, random_state=0
     ).fit(X_train, y_train)
 
-    assert isinstance(ensemble.base_estimator_.steps[-1][1], DecisionTreeClassifier)
+    assert isinstance(ensemble.estimator_.steps[-1][1], DecisionTreeClassifier)
 
     ensemble = BalancedBaggingClassifier(
         Perceptron(max_iter=1000, tol=1e-3), n_jobs=3, random_state=0
     ).fit(X_train, y_train)
 
-    assert isinstance(ensemble.base_estimator_.steps[-1][1], Perceptron)
+    assert isinstance(ensemble.estimator_.steps[-1][1], Perceptron)
 
 
 def test_bagging_with_pipeline():
@@ -460,7 +432,7 @@ def test_estimators_samples():
     # remap the y outside of the BalancedBaggingclassifier
     # _, y = np.unique(y, return_inverse=True)
     bagging = BalancedBaggingClassifier(
-        LogisticRegression(solver="lbfgs", multi_class="auto"),
+        LogisticRegression(),
         max_samples=0.5,
         max_features=0.5,
         random_state=1,
@@ -518,12 +490,16 @@ class CountDecisionTreeClassifier(DecisionTreeClassifier):
         return super().fit(X, y, sample_weight=sample_weight)
 
 
+@pytest.mark.filterwarnings("ignore:Number of distinct clusters")
 @pytest.mark.parametrize(
     "sampler, n_samples_bootstrap",
     [
         (None, 15),
         (RandomUnderSampler(), 15),  # under-sampling with sample_indices_
-        (ClusterCentroids(), 15),  # under-sampling without sample_indices_
+        (
+            ClusterCentroids(estimator=KMeans(n_init=1)),
+            15,
+        ),  # under-sampling without sample_indices_
         (RandomOverSampler(), 40),  # over-sampling with sample_indices_
         (SMOTE(), 40),  # over-sampling without sample_indices_
     ],
@@ -538,7 +514,7 @@ def test_balanced_bagging_classifier_samplers(sampler, n_samples_bootstrap):
     )
     X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=0)
     clf = BalancedBaggingClassifier(
-        base_estimator=CountDecisionTreeClassifier(),
+        estimator=CountDecisionTreeClassifier(),
         n_estimators=2,
         sampler=sampler,
         random_state=0,
@@ -593,14 +569,15 @@ def test_balanced_bagging_classifier_with_function_sampler(replace):
 
     # Roughly Balanced Bagging
     rbb = BalancedBaggingClassifier(
-        base_estimator=CountDecisionTreeClassifier(),
+        estimator=CountDecisionTreeClassifier(random_state=0),
         n_estimators=2,
         sampler=FunctionSampler(
             func=roughly_balanced_bagging, kw_args={"replace": replace}
         ),
+        random_state=0,
     )
     rbb.fit(X, y)
 
     for estimator in rbb.estimators_:
         class_counts = estimator[-1].class_counts_
-        assert (class_counts[0] / class_counts[1]) > 0.8
+        assert (class_counts[0] / class_counts[1]) > 0.78

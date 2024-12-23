@@ -25,8 +25,9 @@ print(__doc__)
 ###############################################################################
 
 from collections import Counter
-import pandas as pd
+
 import numpy as np
+import pandas as pd
 
 ###############################################################################
 # First, you should download the Porto Seguro data set from Kaggle. See the
@@ -49,11 +50,9 @@ print(f"The data set is imbalanced: {Counter(y_train['target'])}")
 ###############################################################################
 
 from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.preprocessing import StandardScaler
-from sklearn.preprocessing import FunctionTransformer
 from sklearn.impute import SimpleImputer
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
 
 
 def convert_float64(X):
@@ -95,16 +94,12 @@ import os
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
+from tensorflow.keras.layers import Activation, BatchNormalization, Dense, Dropout
+
 ###############################################################################
 # Create a neural-network
 ###############################################################################
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import (
-    Activation,
-    Dense,
-    Dropout,
-    BatchNormalization,
-)
 
 
 def make_model(n_features):
@@ -154,15 +149,23 @@ def timeit(f):
 ###############################################################################
 # The first model will be trained using the ``fit`` method and with imbalanced
 # mini-batches.
-
+import tensorflow
 from sklearn.metrics import roc_auc_score
+from sklearn.utils.fixes import parse_version
+
+tf_version = parse_version(tensorflow.__version__)
 
 
 @timeit
 def fit_predict_imbalanced_model(X_train, y_train, X_test, y_test):
     model = make_model(X_train.shape[1])
     model.fit(X_train, y_train, epochs=2, verbose=1, batch_size=1000)
-    y_pred = model.predict_proba(X_test, batch_size=1000)
+    if tf_version < parse_version("2.6"):
+        # predict_proba was removed in tensorflow 2.6
+        predict_method = "predict_proba"
+    else:
+        predict_method = "predict"
+    y_pred = getattr(model, predict_method)(X_test, batch_size=1000)
     return roc_auc_score(y_test, y_pred)
 
 
@@ -235,8 +238,8 @@ df_time = pd.DataFrame(
 )
 df_time = df_time.unstack().reset_index()
 
-import seaborn as sns
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 plt.figure()
 sns.boxplot(y="level_0", x=0, data=df_time)

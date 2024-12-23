@@ -1,11 +1,10 @@
-import pytest
 import numpy as np
-
+import pytest
+from sklearn.datasets import make_classification
+from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import NearestNeighbors
 from sklearn.svm import SVC
-
-from sklearn.utils._testing import assert_allclose
-from sklearn.utils._testing import assert_array_equal
+from sklearn.utils._testing import assert_allclose, assert_array_equal
 
 from imblearn.over_sampling import SVMSMOTE
 
@@ -54,3 +53,36 @@ def test_svm_smote(data):
 
     assert_allclose(X_res_1, X_res_2)
     assert_array_equal(y_res_1, y_res_2)
+
+
+def test_svm_smote_not_svm(data):
+    """Check that we raise a proper error if passing an estimator that does not
+    expose a `support_` fitted attribute."""
+
+    err_msg = "`svm_estimator` is required to exposed a `support_` fitted attribute."
+    with pytest.raises(RuntimeError, match=err_msg):
+        SVMSMOTE(svm_estimator=LogisticRegression()).fit_resample(*data)
+
+
+def test_svm_smote_all_noise(data):
+    """Check that we raise a proper error message when all support vectors are
+    detected as noise and there is nothing that we can do.
+
+    Non-regression test for:
+    https://github.com/scikit-learn-contrib/imbalanced-learn/issues/742
+    """
+    X, y = make_classification(
+        n_classes=3,
+        class_sep=0.001,
+        weights=[0.004, 0.451, 0.545],
+        n_informative=3,
+        n_redundant=0,
+        flip_y=0,
+        n_features=3,
+        n_clusters_per_class=2,
+        n_samples=1000,
+        random_state=10,
+    )
+
+    with pytest.raises(ValueError, match="SVM-SMOTE is not adapted to your dataset"):
+        SVMSMOTE(k_neighbors=4, random_state=42).fit_resample(X, y)

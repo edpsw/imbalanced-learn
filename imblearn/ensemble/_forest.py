@@ -4,38 +4,37 @@
 # License: MIT
 
 import numbers
-from warnings import warn
 from copy import deepcopy
+from warnings import warn
 
 import numpy as np
 from numpy import float32 as DTYPE
 from numpy import float64 as DOUBLE
 from scipy.sparse import issparse
-
-from joblib import Parallel, delayed
-
-from sklearn.base import clone
+from sklearn.base import clone, is_classifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble._base import _set_random_states
-from sklearn.ensemble._forest import _get_n_samples_bootstrap
-from sklearn.ensemble._forest import _parallel_build_trees
-from sklearn.ensemble._forest import _generate_unsampled_indices
+from sklearn.ensemble._forest import (
+    _generate_unsampled_indices,
+    _get_n_samples_bootstrap,
+    _parallel_build_trees,
+)
 from sklearn.exceptions import DataConversionWarning
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.utils import check_array
-from sklearn.utils import check_random_state
-from sklearn.utils import _safe_indexing
-from sklearn.utils.fixes import _joblib_parallel_args
+from sklearn.utils import _safe_indexing, check_random_state
+from sklearn.utils._param_validation import Hidden, Interval, StrOptions
+from sklearn.utils.fixes import parse_version
+from sklearn.utils.multiclass import type_of_target
+from sklearn.utils.parallel import Parallel, delayed
 from sklearn.utils.validation import _check_sample_weight
 
 from ..pipeline import make_pipeline
 from ..under_sampling import RandomUnderSampler
-from ..under_sampling.base import BaseUnderSampler
 from ..utils import Substitution
-from ..utils._docstring import _n_jobs_docstring
-from ..utils._docstring import _random_state_docstring
+from ..utils._docstring import _n_jobs_docstring, _random_state_docstring
+from ..utils._sklearn_compat import _fit_context, sklearn_version, validate_data
 from ..utils._validation import check_sampling_strategy
-from ..utils._validation import _deprecate_positional_args
+from ._common import _random_forest_classifier_parameter_constraints
 
 MAX_INT = np.iinfo(np.int32).max
 
@@ -43,7 +42,7 @@ MAX_INT = np.iinfo(np.int32).max
 def _local_parallel_build_trees(
     sampler,
     tree,
-    forest,
+    bootstrap,
     X,
     y,
     sample_weight,
@@ -52,6 +51,8 @@ def _local_parallel_build_trees(
     verbose=0,
     class_weight=None,
     n_samples_bootstrap=None,
+    forest=None,
+    missing_values_in_feature_mask=None,
 ):
     # resample before to fit the tree
     X_resampled, y_resampled = sampler.fit_resample(X, y)
@@ -59,31 +60,43 @@ def _local_parallel_build_trees(
         sample_weight = _safe_indexing(sample_weight, sampler.sample_indices_)
     if _get_n_samples_bootstrap is not None:
         n_samples_bootstrap = min(n_samples_bootstrap, X_resampled.shape[0])
-    tree = _parallel_build_trees(
-        tree,
-        forest,
-        X_resampled,
-        y_resampled,
-        sample_weight,
-        tree_idx,
-        n_trees,
-        verbose=verbose,
-        class_weight=class_weight,
-        n_samples_bootstrap=n_samples_bootstrap,
-    )
+
+    params_parallel_build_trees = {
+        "tree": tree,
+        "X": X_resampled,
+        "y": y_resampled,
+        "sample_weight": sample_weight,
+        "tree_idx": tree_idx,
+        "n_trees": n_trees,
+        "verbose": verbose,
+        "class_weight": class_weight,
+        "n_samples_bootstrap": n_samples_bootstrap,
+        "bootstrap": bootstrap,
+    }
+
+    if sklearn_version >= parse_version("1.4"):
+        # TODO: remove when the minimum supported version of scikit-learn will be 1.4
+        # support for missing values
+        params_parallel_build_trees["missing_values_in_feature_mask"] = (
+            missing_values_in_feature_mask
+        )
+
+    tree = _parallel_build_trees(**params_parallel_build_trees)
+
     return sampler, tree
 
 
 @Substitution(
-    sampling_strategy=BaseUnderSampler._sampling_strategy_docstring,
     n_jobs=_n_jobs_docstring,
     random_state=_random_state_docstring,
 )
 class BalancedRandomForestClassifier(RandomForestClassifier):
     """A balanced random forest classifier.
 
-    A balanced random forest randomly under-samples each boostrap sample to
-    balance it.
+    A balanced random forest differs from a classical random forest by the
+    fact that it will draw a bootstrap sample from the minority class and
+    sample with replacement the same number of samples from the majority
+    class.
 
     Read more in the :ref:`User Guide <forest>`.
 
@@ -126,7 +139,7 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
         equal weight when sample_weight is not provided.
 
     max_features : {{"auto", "sqrt", "log2"}}, int, float, or None, \
-            default="auto"
+            default="sqrt"
         The number of features to consider when looking for the best split:
 
         - If int, then consider `max_features` features at each split.
@@ -164,14 +177,65 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
     bootstrap : bool, default=True
         Whether bootstrap samples are used when building trees.
 
+        .. versionchanged:: 0.13
+           The default of `bootstrap` will change from `True` to `False` in
+           version 0.13. Bootstrapping is already taken care by the internal
+           sampler using `replacement=True`. This implementation follows the
+           algorithm proposed in [1]_.
+
     oob_score : bool, default=False
         Whether to use out-of-bag samples to estimate
         the generalization accuracy.
 
-    {sampling_strategy}
+    sampling_strategy : float, str, dict, callable, default="auto"
+        Sampling information to sample the data set.
+
+        - When ``float``, it corresponds to the desired ratio of the number of
+          samples in the minority class over the number of samples in the
+          majority class after resampling. Therefore, the ratio is expressed as
+          :math:`\\alpha_{{us}} = N_{{m}} / N_{{rM}}` where :math:`N_{{m}}` is the
+          number of samples in the minority class and
+          :math:`N_{{rM}}` is the number of samples in the majority class
+          after resampling.
+
+          .. warning::
+             ``float`` is only available for **binary** classification. An
+             error is raised for multi-class classification.
+
+        - When ``str``, specify the class targeted by the resampling. The
+          number of samples in the different classes will be equalized.
+          Possible choices are:
+
+            ``'majority'``: resample only the majority class;
+
+            ``'not minority'``: resample all classes but the minority class;
+
+            ``'not majority'``: resample all classes but the majority class;
+
+            ``'all'``: resample all classes;
+
+            ``'auto'``: equivalent to ``'not minority'``.
+
+        - When ``dict``, the keys correspond to the targeted classes. The
+          values correspond to the desired number of samples for each targeted
+          class.
+
+        - When callable, function taking ``y`` and returns a ``dict``. The keys
+          correspond to the targeted classes. The values correspond to the
+          desired number of samples for each class.
+
+        .. versionchanged:: 0.11
+           The default of `sampling_strategy` will change from `"auto"` to
+           `"all"` in version 0.13. This forces to use a bootstrap of the
+           minority class as proposed in [1]_.
 
     replacement : bool, default=False
         Whether or not to sample randomly with replacement or not.
+
+        .. versionchanged:: 0.11
+           The default of `replacement` will change from `False` to `True` in
+           version 0.13. This forces to use a bootstrap of the
+           minority class and draw with replacement as proposed in [1]_.
 
     {n_jobs}
 
@@ -229,11 +293,32 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
         .. versionadded:: 0.6
            Added in `scikit-learn` in 0.22
 
+    monotonic_cst : array-like of int of shape (n_features), default=None
+        Indicates the monotonicity constraint to enforce on each feature.
+          - 1: monotonic increase
+          - 0: no constraint
+          - -1: monotonic decrease
+
+        If monotonic_cst is None, no constraints are applied.
+
+        Monotonicity constraints are not supported for:
+          - multiclass classifications (i.e. when `n_classes > 2`),
+          - multioutput classifications (i.e. when `n_outputs_ > 1`),
+          - classifications trained on data with missing values.
+
+        The constraints hold over the probability of the positive class.
+
+        .. versionadded:: 0.12
+           Only supported when scikit-learn >= 1.4 is installed. Otherwise, a
+           `ValueError` is raised.
+
     Attributes
     ----------
-    base_estimator_ : :class:`~sklearn.tree.DecisionTreeClassifier` instance
+    estimator_ : :class:`~sklearn.tree.DecisionTreeClassifier` instance
         The child estimator template used to create the collection of fitted
         sub-estimators.
+
+        .. versionadded:: 0.10
 
     estimators_ : list of :class:`~sklearn.tree.DecisionTreeClassifier`
         The collection of fitted sub-estimators.
@@ -255,20 +340,12 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
         The number of classes (single output problem), or a list containing the
         number of classes for each output (multi-output problem).
 
-    n_features_ : int
-        The number of features when ``fit`` is performed.
-
-        .. deprecated:: 1.0
-           `n_features_` is deprecated in `scikit-learn` 1.0 and will be removed
-           in version 1.2. Depending of the version of `scikit-learn` installed,
-           you will get be warned or not.
-
     n_features_in_ : int
         Number of features in the input dataset.
 
         .. versionadded:: 0.9
 
-    feature_names_in_ : ndarray of shape (n_features_in_,)
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
         Names of features seen during `fit`. Defined only when `X` has feature
         names that are all strings.
 
@@ -314,17 +391,40 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
     >>> X, y = make_classification(n_samples=1000, n_classes=3,
     ...                            n_informative=4, weights=[0.2, 0.3, 0.5],
     ...                            random_state=0)
-    >>> clf = BalancedRandomForestClassifier(max_depth=2, random_state=0)
-    >>> clf.fit(X, y)  # doctest: +ELLIPSIS
+    >>> clf = BalancedRandomForestClassifier(
+    ...     sampling_strategy="all", replacement=True, max_depth=2, random_state=0,
+    ...     bootstrap=False)
+    >>> clf.fit(X, y)
     BalancedRandomForestClassifier(...)
-    >>> print(clf.feature_importances_)  # doctest: +ELLIPSIS
+    >>> print(clf.feature_importances_)
     [...]
     >>> print(clf.predict([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ...                     0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]))
     [1]
     """
 
-    @_deprecate_positional_args
+    # make a deepcopy to not modify the original dictionary
+    if sklearn_version >= parse_version("1.4"):
+        _parameter_constraints = deepcopy(RandomForestClassifier._parameter_constraints)
+    else:
+        _parameter_constraints = deepcopy(
+            _random_forest_classifier_parameter_constraints
+        )
+
+    _parameter_constraints.update(
+        {
+            "bootstrap": ["boolean", Hidden(StrOptions({"warn"}))],
+            "sampling_strategy": [
+                Interval(numbers.Real, 0, 1, closed="right"),
+                StrOptions({"auto", "majority", "not minority", "not majority", "all"}),
+                dict,
+                callable,
+                Hidden(StrOptions({"warn"})),
+            ],
+            "replacement": ["boolean", Hidden(StrOptions({"warn"}))],
+        }
+    )
+
     def __init__(
         self,
         n_estimators=100,
@@ -334,13 +434,13 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
         min_samples_split=2,
         min_samples_leaf=1,
         min_weight_fraction_leaf=0.0,
-        max_features="auto",
+        max_features="sqrt",
         max_leaf_nodes=None,
         min_impurity_decrease=0.0,
-        bootstrap=True,
+        bootstrap=False,
         oob_score=False,
-        sampling_strategy="auto",
-        replacement=False,
+        sampling_strategy="all",
+        replacement=True,
         n_jobs=None,
         random_state=None,
         verbose=0,
@@ -348,48 +448,53 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
         class_weight=None,
         ccp_alpha=0.0,
         max_samples=None,
+        monotonic_cst=None,
     ):
-        super().__init__(
-            criterion=criterion,
-            max_depth=max_depth,
-            n_estimators=n_estimators,
-            bootstrap=bootstrap,
-            oob_score=oob_score,
-            n_jobs=n_jobs,
-            random_state=random_state,
-            verbose=verbose,
-            warm_start=warm_start,
-            class_weight=class_weight,
-            min_samples_split=min_samples_split,
-            min_samples_leaf=min_samples_leaf,
-            min_weight_fraction_leaf=min_weight_fraction_leaf,
-            max_features=max_features,
-            max_leaf_nodes=max_leaf_nodes,
-            min_impurity_decrease=min_impurity_decrease,
-            ccp_alpha=ccp_alpha,
-            max_samples=max_samples,
-        )
+        params_random_forest = {
+            "criterion": criterion,
+            "max_depth": max_depth,
+            "n_estimators": n_estimators,
+            "bootstrap": bootstrap,
+            "oob_score": oob_score,
+            "n_jobs": n_jobs,
+            "random_state": random_state,
+            "verbose": verbose,
+            "warm_start": warm_start,
+            "class_weight": class_weight,
+            "min_samples_split": min_samples_split,
+            "min_samples_leaf": min_samples_leaf,
+            "min_weight_fraction_leaf": min_weight_fraction_leaf,
+            "max_features": max_features,
+            "max_leaf_nodes": max_leaf_nodes,
+            "min_impurity_decrease": min_impurity_decrease,
+            "ccp_alpha": ccp_alpha,
+            "max_samples": max_samples,
+        }
+        # TODO: remove when the minimum supported version of scikit-learn will be 1.4
+        if sklearn_version >= parse_version("1.4"):
+            # use scikit-learn support for monotonic constraints
+            params_random_forest["monotonic_cst"] = monotonic_cst
+        else:
+            if monotonic_cst is not None:
+                raise ValueError(
+                    "Monotonic constraints are not supported for scikit-learn "
+                    "version < 1.4."
+                )
+            # create an attribute for compatibility with other scikit-learn tools such
+            # as HTML representation.
+            self.monotonic_cst = monotonic_cst
+        super().__init__(**params_random_forest)
 
         self.sampling_strategy = sampling_strategy
         self.replacement = replacement
 
     def _validate_estimator(self, default=DecisionTreeClassifier()):
         """Check the estimator and the n_estimator attribute, set the
-        `base_estimator_` attribute."""
-        if not isinstance(self.n_estimators, (numbers.Integral, np.integer)):
-            raise ValueError(
-                f"n_estimators must be an integer, " f"got {type(self.n_estimators)}."
-            )
-
-        if self.n_estimators <= 0:
-            raise ValueError(
-                f"n_estimators must be greater than zero, " f"got {self.n_estimators}."
-            )
-
-        if self.base_estimator is not None:
-            self.base_estimator_ = clone(self.base_estimator)
+        `estimator_` attribute."""
+        if self.estimator is not None:
+            self.estimator_ = clone(self.estimator)
         else:
-            self.base_estimator_ = clone(default)
+            self.estimator_ = clone(default)
 
         self.base_sampler_ = RandomUnderSampler(
             sampling_strategy=self._sampling_strategy,
@@ -401,7 +506,7 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
         Warning: This method should be used to properly instantiate new
         sub-estimators.
         """
-        estimator = clone(self.base_estimator_)
+        estimator = clone(self.estimator_)
         estimator.set_params(**{p: getattr(self, p) for p in self.estimator_params})
         sampler = clone(self.base_sampler_)
 
@@ -411,6 +516,7 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
 
         return estimator, sampler
 
+    @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X, y, sample_weight=None):
         """Build a forest of trees from the training set (X, y).
 
@@ -437,15 +543,46 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
         self : object
             The fitted instance.
         """
-
+        self._validate_params()
         # Validate or convert input data
         if issparse(y):
             raise ValueError("sparse multilabel-indicator for y is not supported.")
-        X, y = self._validate_data(
-            X, y, multi_output=True, accept_sparse="csc", dtype=DTYPE
+
+        # TODO: remove when the minimum supported version of scipy will be 1.4
+        # Support for missing values
+        if sklearn_version >= parse_version("1.4"):
+            ensure_all_finite = False
+        else:
+            ensure_all_finite = True
+
+        X, y = validate_data(
+            self,
+            X=X,
+            y=y,
+            multi_output=True,
+            accept_sparse="csc",
+            dtype=DTYPE,
+            ensure_all_finite=ensure_all_finite,
         )
+
+        # TODO: remove when the minimum supported version of scikit-learn will be 1.4
+        if sklearn_version >= parse_version("1.4"):
+            # _compute_missing_values_in_feature_mask checks if X has missing values and
+            # will raise an error if the underlying tree base estimator can't handle
+            # missing values. Only the criterion is required to determine if the tree
+            # supports missing values.
+            estimator = type(self.estimator)(criterion=self.criterion)
+            missing_values_in_feature_mask = (
+                estimator._compute_missing_values_in_feature_mask(
+                    X, estimator_name=self.__class__.__name__
+                )
+            )
+        else:
+            missing_values_in_feature_mask = None
+
         if sample_weight is not None:
             sample_weight = _check_sample_weight(sample_weight, X)
+
         self._n_features = X.shape[1]
 
         if issparse(X):
@@ -456,9 +593,11 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
         y = np.atleast_1d(y)
         if y.ndim == 2 and y.shape[1] == 1:
             warn(
-                "A column-vector y was passed when a 1d array was"
-                " expected. Please change the shape of y to "
-                "(n_samples,), for example using ravel().",
+                (
+                    "A column-vector y was passed when a 1d array was"
+                    " expected. Please change the shape of y to "
+                    "(n_samples,), for example using ravel()."
+                ),
                 DataConversionWarning,
                 stacklevel=2,
             )
@@ -548,12 +687,12 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
             samplers_trees = Parallel(
                 n_jobs=self.n_jobs,
                 verbose=self.verbose,
-                **_joblib_parallel_args(prefer="threads"),
+                prefer="threads",
             )(
                 delayed(_local_parallel_build_trees)(
                     s,
                     t,
-                    self,
+                    self.bootstrap,
                     X,
                     y_encoded,
                     sample_weight,
@@ -562,6 +701,8 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
                     verbose=self.verbose,
                     class_weight=self.class_weight,
                     n_samples_bootstrap=n_samples_bootstrap,
+                    forest=self,
+                    missing_values_in_feature_mask=missing_values_in_feature_mask,
                 )
                 for i, (s, t) in enumerate(zip(samplers, trees))
             )
@@ -580,7 +721,19 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
             )
 
         if self.oob_score:
-            self._set_oob_score(X, y_encoded)
+            y_type = type_of_target(y)
+            if y_type in ("multiclass-multioutput", "unknown"):
+                # FIXME: we could consider to support multiclass-multioutput if
+                # we introduce or reuse a constructor parameter (e.g.
+                # oob_score) allowing our user to pass a callable defining the
+                # scoring strategy on OOB sample.
+                raise ValueError(
+                    "The type of target cannot be used to compute OOB "
+                    f"estimates. Got {y_type} while only the following are "
+                    "supported: continuous, continuous-multioutput, binary, "
+                    "multiclass, multilabel-indicator."
+                )
+            self._set_oob_score_and_attributes(X, y_encoded)
 
         # Decapsulate classes_ attributes
         if hasattr(self, "classes_") and self.n_outputs_ == 1:
@@ -589,18 +742,62 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
 
         return self
 
-    def _set_oob_score(self, X, y):
-        """Compute out-of-bag score."""
-        X = check_array(X, dtype=DTYPE, accept_sparse="csr")
+    def _set_oob_score_and_attributes(self, X, y):
+        """Compute and set the OOB score and attributes.
 
-        n_classes_ = self.n_classes_
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The data matrix.
+        y : ndarray of shape (n_samples, n_outputs)
+            The target matrix.
+        """
+        self.oob_decision_function_ = self._compute_oob_predictions(X, y)
+        if self.oob_decision_function_.shape[-1] == 1:
+            # drop the n_outputs axis if there is a single output
+            self.oob_decision_function_ = self.oob_decision_function_.squeeze(axis=-1)
+        from sklearn.metrics import accuracy_score
+
+        self.oob_score_ = accuracy_score(
+            y, np.argmax(self.oob_decision_function_, axis=1)
+        )
+
+    def _compute_oob_predictions(self, X, y):
+        """Compute and set the OOB score.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features)
+            The data matrix.
+        y : ndarray of shape (n_samples, n_outputs)
+            The target matrix.
+
+        Returns
+        -------
+        oob_pred : ndarray of shape (n_samples, n_classes, n_outputs) or \
+                (n_samples, 1, n_outputs)
+            The OOB predictions.
+        """
+        # Prediction requires X to be in CSR format
+        if issparse(X):
+            X = X.tocsr()
+
         n_samples = y.shape[0]
+        n_outputs = self.n_outputs_
 
-        oob_decision_function = []
-        oob_score = 0.0
-        predictions = [
-            np.zeros((n_samples, n_classes_[k])) for k in range(self.n_outputs_)
-        ]
+        if is_classifier(self) and hasattr(self, "n_classes_"):
+            # n_classes_ is a ndarray at this stage
+            # all the supported type of target will have the same number of
+            # classes in all outputs
+            oob_pred_shape = (n_samples, self.n_classes_[0], n_outputs)
+        else:
+            # for regression, n_classes_ does not exist and we create an empty
+            # axis to be consistent with the classification case and make
+            # the array operations compatible with the 2 settings
+            oob_pred_shape = (n_samples, 1, n_outputs)
+
+        oob_pred = np.zeros(shape=oob_pred_shape, dtype=np.float64)
+        n_oob_pred = np.zeros((n_samples, n_outputs), dtype=np.int64)
 
         for sampler, estimator in zip(self.samplers_, self.estimators_):
             X_resample = X[sampler.sample_indices_]
@@ -614,50 +811,36 @@ class BalancedRandomForestClassifier(RandomForestClassifier):
             unsampled_indices = _generate_unsampled_indices(
                 estimator.random_state, n_sample_subset, n_samples_bootstrap
             )
-            p_estimator = estimator.predict_proba(
-                X_resample[unsampled_indices, :], check_input=False
+
+            y_pred = self._get_oob_predictions(
+                estimator, X_resample[unsampled_indices, :]
             )
 
-            if self.n_outputs_ == 1:
-                p_estimator = [p_estimator]
+            indices = sampler.sample_indices_[unsampled_indices]
+            oob_pred[indices, ...] += y_pred
+            n_oob_pred[indices, :] += 1
 
-            for k in range(self.n_outputs_):
-                indices = sampler.sample_indices_[unsampled_indices]
-                predictions[k][indices, :] += p_estimator[k]
-
-        for k in range(self.n_outputs_):
-            if (predictions[k].sum(axis=1) == 0).any():
+        for k in range(n_outputs):
+            if (n_oob_pred == 0).any():
                 warn(
-                    "Some inputs do not have OOB scores. "
-                    "This probably means too few trees were used "
-                    "to compute any reliable oob estimates."
+                    (
+                        "Some inputs do not have OOB scores. This probably means "
+                        "too few trees were used to compute any reliable OOB "
+                        "estimates."
+                    ),
+                    UserWarning,
                 )
+                n_oob_pred[n_oob_pred == 0] = 1
+            oob_pred[..., k] /= n_oob_pred[..., [k]]
 
-            with np.errstate(invalid="ignore", divide="ignore"):
-                # with the resampling, we are likely to have rows not included
-                # for the OOB score leading to division by zero
-                decision = predictions[k] / predictions[k].sum(axis=1)[:, np.newaxis]
-            mask_scores = np.isnan(np.sum(decision, axis=1))
-            oob_decision_function.append(decision)
-            oob_score += np.mean(
-                y[~mask_scores, k] == np.argmax(predictions[k][~mask_scores], axis=1),
-                axis=0,
-            )
-
-        if self.n_outputs_ == 1:
-            self.oob_decision_function_ = oob_decision_function[0]
-        else:
-            self.oob_decision_function_ = oob_decision_function
-
-        self.oob_score_ = oob_score / self.n_outputs_
-
-    @property
-    def n_features_(self):
-        """Number of features when fitting the estimator."""
-        return getattr(self.n_features_in_, "n_features_", self._n_features)
+        return oob_pred
 
     def _more_tags(self):
-        return {
-            "multioutput": False,
-            "multilabel": False,
-        }
+        return {"multioutput": False, "multilabel": False}
+
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.target_tags.multi_output = False
+        tags.classifier_tags.multi_label = False
+        tags.input_tags.allow_nan = sklearn_version >= parse_version("1.4")
+        return tags

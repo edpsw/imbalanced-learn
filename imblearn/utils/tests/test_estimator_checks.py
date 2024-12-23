@@ -1,19 +1,21 @@
-import pytest
 import numpy as np
-
+import pytest
 from sklearn.base import BaseEstimator
 from sklearn.utils.multiclass import check_classification_targets
 
 from imblearn.base import BaseSampler
 from imblearn.over_sampling.base import BaseOverSampler
 from imblearn.utils import check_target_type as target_check
-from imblearn.utils.estimator_checks import check_target_type
-from imblearn.utils.estimator_checks import check_samplers_one_label
-from imblearn.utils.estimator_checks import check_samplers_fit
-from imblearn.utils.estimator_checks import check_samplers_sparse
-from imblearn.utils.estimator_checks import check_samplers_preserve_dtype
-from imblearn.utils.estimator_checks import check_samplers_string
-from imblearn.utils.estimator_checks import check_samplers_nan
+from imblearn.utils._sklearn_compat import validate_data
+from imblearn.utils.estimator_checks import (
+    check_samplers_fit,
+    check_samplers_nan,
+    check_samplers_one_label,
+    check_samplers_preserve_dtype,
+    check_samplers_sparse,
+    check_samplers_string,
+    check_target_type,
+)
 
 
 class BaseBadSampler(BaseEstimator):
@@ -46,7 +48,7 @@ class NotFittedSampler(BaseBadSampler):
     """Sampler without target checking."""
 
     def fit(self, X, y):
-        X, y = self._validate_data(X, y)
+        X, y = validate_data(self, X=X, y=y)
         return self
 
 
@@ -54,13 +56,15 @@ class NoAcceptingSparseSampler(BaseBadSampler):
     """Sampler which does not accept sparse matrix."""
 
     def fit(self, X, y):
-        X, y = self._validate_data(X, y)
+        X, y = validate_data(self, X=X, y=y)
         self.sampling_strategy_ = "sampling_strategy_"
         return self
 
 
 class NotPreservingDtypeSampler(BaseSampler):
     _sampling_type = "bypass"
+
+    _parameter_constraints: dict = {"sampling_strategy": "no_validation"}
 
     def _fit_resample(self, X, y):
         return X.astype(np.float64), y.astype(np.int64)
@@ -69,12 +73,13 @@ class NotPreservingDtypeSampler(BaseSampler):
 class IndicesSampler(BaseOverSampler):
     def _check_X_y(self, X, y):
         y, binarize_y = target_check(y, indicate_one_vs_all=True)
-        X, y = self._validate_data(
-            X,
-            y,
+        X, y = validate_data(
+            self,
+            X=X,
+            y=y,
             reset=True,
             dtype=None,
-            force_all_finite=False,
+            ensure_all_finite=False,
         )
         return X, y, binarize_y
 
@@ -95,10 +100,10 @@ def test_check_samplers_nan():
 
 
 mapping_estimator_error = {
-    "BaseBadSampler": (AssertionError, "ValueError not raised by fit"),
+    "BaseBadSampler": (AssertionError, None),
     "SamplerSingleClass": (AssertionError, "Sampler can't balance when only"),
     "NotFittedSampler": (AssertionError, "No fitted attribute"),
-    "NoAcceptingSparseSampler": (TypeError, "A sparse matrix was passed"),
+    "NoAcceptingSparseSampler": (TypeError, "dense data is required"),
     "NotPreservingDtypeSampler": (AssertionError, "X dtype is not preserved"),
 }
 

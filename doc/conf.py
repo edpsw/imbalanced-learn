@@ -15,8 +15,8 @@
 import os
 import sys
 from datetime import datetime
-from pathlib import Path
 from io import StringIO
+from pathlib import Path
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -42,7 +42,13 @@ extensions = [
     "numpydoc",
     "sphinx_issues",
     "sphinx_gallery.gen_gallery",
+    "sphinx_copybutton",
+    "sphinx_design",
 ]
+
+# Specify how to identify the prompt when copying code snippets
+copybutton_prompt_text = r">>> |\.\.\. "
+copybutton_prompt_is_regexp = True
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
@@ -82,11 +88,6 @@ add_function_parentheses = False
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = "sphinx"
 
-# -- Options for math equations -----------------------------------------------
-
-extensions.append("sphinx.ext.imgmath")
-imgmath_image_format = "svg"
-
 # -- Options for HTML output ----------------------------------------------
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
@@ -106,10 +107,14 @@ html_sidebars = {
 html_theme_options = {
     "external_links": [],
     "github_url": "https://github.com/scikit-learn-contrib/imbalanced-learn",
-    # "twitter_url": "https://twitter.com/pandas_dev",
     "use_edit_page_button": True,
     "show_toc_level": 1,
     # "navbar_align": "right",  # For testing that the navbar items align properly
+    "logo": {
+        "image_dark": (
+            "https://imbalanced-learn.org/stable/_static/img/logo_wide_dark.png"
+        )
+    },
 }
 
 html_context = {
@@ -184,9 +189,11 @@ issues_user_uri = "https://github.com/{user}"
 # The following is used by sphinx.ext.linkcode to provide links to github
 linkcode_resolve = make_linkcode_resolve(
     "imblearn",
-    "https://github.com/scikit-learn-contrib/"
-    "imbalanced-learn/blob/{revision}/"
-    "{package}/{path}#L{lineno}",
+    (
+        "https://github.com/scikit-learn-contrib/"
+        "imbalanced-learn/blob/{revision}/"
+        "{package}/{path}#L{lineno}"
+    ),
 )
 
 # -- Options for LaTeX output ---------------------------------------------
@@ -323,16 +330,7 @@ def generate_min_dependency_substitutions(app):
 
 # -- Additional temporary hacks -----------------------------------------------
 
-# Temporary work-around for spacing problem between parameter and parameter
-# type in the doc, see https://github.com/numpy/numpydoc/issues/215. The bug
-# has been fixed in sphinx (https://github.com/sphinx-doc/sphinx/pull/5976) but
-# through a change in sphinx basic.css except rtd_theme does not use basic.css.
-# In an ideal world, this would get fixed in this PR:
-# https://github.com/readthedocs/sphinx_rtd_theme/pull/747/files
-
 
 def setup(app):
     app.connect("builder-inited", generate_min_dependency_table)
     app.connect("builder-inited", generate_min_dependency_substitutions)
-    app.add_js_file("js/copybutton.js")
-    app.add_css_file("basic.css")

@@ -5,21 +5,20 @@ method."""
 #          Christos Aridas
 # License: MIT
 
+import numbers
+import warnings
 from collections import Counter
 
 import numpy as np
-
 from scipy.sparse import issparse
-
 from sklearn.base import clone
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.utils import check_random_state, _safe_indexing
+from sklearn.utils import _safe_indexing, check_random_state
+from sklearn.utils._param_validation import HasMethods, Interval
 
-from ..base import BaseCleaningSampler
 from ...utils import Substitution
-from ...utils._docstring import _n_jobs_docstring
-from ...utils._docstring import _random_state_docstring
-from ...utils._validation import _deprecate_positional_args
+from ...utils._docstring import _n_jobs_docstring, _random_state_docstring
+from ..base import BaseCleaningSampler
 
 
 @Substitution(
@@ -61,6 +60,16 @@ class CondensedNearestNeighbour(BaseCleaningSampler):
     estimator_ : estimator object
         The validated K-nearest neighbor estimator created from `n_neighbors` parameter.
 
+        .. deprecated:: 0.12
+           `estimator_` is deprecated in 0.12 and will be removed in 0.14. Use
+           `estimators_` instead that contains the list of all K-nearest
+           neighbors estimator used for each pair of class.
+
+    estimators_ : list of estimator objects of shape (n_resampled_classes - 1,)
+        Contains the K-nearest neighbor estimator used for per of classes.
+
+        .. versionadded:: 0.12
+
     sample_indices_ : ndarray of shape (n_new_samples,)
         Indices of the samples selected.
 
@@ -70,6 +79,12 @@ class CondensedNearestNeighbour(BaseCleaningSampler):
         Number of features in the input dataset.
 
         .. versionadded:: 0.9
+
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
 
     See Also
     --------
@@ -83,8 +98,8 @@ class CondensedNearestNeighbour(BaseCleaningSampler):
     -----
     The method is based on [1]_.
 
-    Supports multi-class resampling. A one-vs.-rest scheme is used when
-    sampling a class as proposed in [1]_.
+    Supports multi-class resampling: a strategy one (minority) vs. each other
+    classes is applied.
 
     References
     ----------
@@ -94,21 +109,35 @@ class CondensedNearestNeighbour(BaseCleaningSampler):
 
     Examples
     --------
-    >>> from collections import Counter # doctest: +SKIP
-    >>> from sklearn.datasets import fetch_mldata # doctest: +SKIP
+    >>> from collections import Counter  # doctest: +SKIP
+    >>> from sklearn.datasets import fetch_openml  # doctest: +SKIP
+    >>> from sklearn.preprocessing import scale  # doctest: +SKIP
     >>> from imblearn.under_sampling import \
-CondensedNearestNeighbour # doctest: +SKIP
-    >>> pima = fetch_mldata('diabetes_scale') # doctest: +SKIP
-    >>> X, y = pima['data'], pima['target'] # doctest: +SKIP
-    >>> print('Original dataset shape %s' % Counter(y)) # doctest: +SKIP
-    Original dataset shape Counter({{1: 500, -1: 268}}) # doctest: +SKIP
-    >>> cnn = CondensedNearestNeighbour(random_state=42) # doctest: +SKIP
-    >>> X_res, y_res = cnn.fit_resample(X, y) #doctest: +SKIP
-    >>> print('Resampled dataset shape %s' % Counter(y_res)) # doctest: +SKIP
-    Resampled dataset shape Counter({{-1: 268, 1: 227}}) # doctest: +SKIP
+CondensedNearestNeighbour  # doctest: +SKIP
+    >>> X, y = fetch_openml('diabetes', version=1, return_X_y=True)  # doctest: +SKIP
+    >>> X = scale(X)  # doctest: +SKIP
+    >>> print('Original dataset shape %s' % Counter(y))  # doctest: +SKIP
+    Original dataset shape Counter({{'tested_negative': 500, \
+        'tested_positive': 268}})  # doctest: +SKIP
+    >>> cnn = CondensedNearestNeighbour(random_state=42)  # doctest: +SKIP
+    >>> X_res, y_res = cnn.fit_resample(X, y)  #doctest: +SKIP
+    >>> print('Resampled dataset shape %s' % Counter(y_res))  # doctest: +SKIP
+    Resampled dataset shape Counter({{'tested_positive': 268, \
+        'tested_negative': 181}})  # doctest: +SKIP
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseCleaningSampler._parameter_constraints,
+        "n_neighbors": [
+            Interval(numbers.Integral, 1, None, closed="left"),
+            HasMethods(["kneighbors", "kneighbors_graph"]),
+            None,
+        ],
+        "n_seeds_S": [Interval(numbers.Integral, 1, None, closed="left")],
+        "n_jobs": [numbers.Integral, None],
+        "random_state": ["random_state"],
+    }
+
     def __init__(
         self,
         *,
@@ -127,28 +156,25 @@ CondensedNearestNeighbour # doctest: +SKIP
     def _validate_estimator(self):
         """Private function to create the NN estimator"""
         if self.n_neighbors is None:
-            self.estimator_ = KNeighborsClassifier(n_neighbors=1, n_jobs=self.n_jobs)
-        elif isinstance(self.n_neighbors, int):
-            self.estimator_ = KNeighborsClassifier(
+            estimator = KNeighborsClassifier(n_neighbors=1, n_jobs=self.n_jobs)
+        elif isinstance(self.n_neighbors, numbers.Integral):
+            estimator = KNeighborsClassifier(
                 n_neighbors=self.n_neighbors, n_jobs=self.n_jobs
             )
         elif isinstance(self.n_neighbors, KNeighborsClassifier):
-            self.estimator_ = clone(self.n_neighbors)
-        else:
-            raise ValueError(
-                f"`n_neighbors` has to be a int or an object"
-                f" inhereited from KNeighborsClassifier."
-                f" Got {type(self.n_neighbors)} instead."
-            )
+            estimator = clone(self.n_neighbors)
+
+        return estimator
 
     def _fit_resample(self, X, y):
-        self._validate_estimator()
+        estimator = self._validate_estimator()
 
         random_state = check_random_state(self.random_state)
         target_stats = Counter(y)
         class_minority = min(target_stats, key=target_stats.get)
         idx_under = np.empty((0,), dtype=int)
 
+        self.estimators_ = []
         for target_class in np.unique(y):
             if target_class in self.sampling_strategy_.keys():
                 # Randomly get one sample from the majority class
@@ -175,12 +201,11 @@ CondensedNearestNeighbour # doctest: +SKIP
                 S_y = _safe_indexing(y, S_indices)
 
                 # fit knn on C
-                self.estimator_.fit(C_x, C_y)
+                self.estimators_.append(clone(estimator).fit(C_x, C_y))
 
                 good_classif_label = idx_maj_sample.copy()
                 # Check each sample in S if we keep it or drop it
                 for idx_sam, (x_sam, y_sam) in enumerate(zip(S_x, S_y)):
-
                     # Do not select sample which are already well classified
                     if idx_sam in good_classif_label:
                         continue
@@ -188,7 +213,7 @@ CondensedNearestNeighbour # doctest: +SKIP
                     # Classify on S
                     if not issparse(x_sam):
                         x_sam = x_sam.reshape(1, -1)
-                    pred_y = self.estimator_.predict(x_sam)
+                    pred_y = self.estimators_[-1].predict(x_sam)
 
                     # If the prediction do not agree with the true label
                     # append it in C_x
@@ -202,12 +227,12 @@ CondensedNearestNeighbour # doctest: +SKIP
                         C_y = _safe_indexing(y, C_indices)
 
                         # fit a knn on C
-                        self.estimator_.fit(C_x, C_y)
+                        self.estimators_[-1].fit(C_x, C_y)
 
                         # This experimental to speed up the search
                         # Classify all the element in S and avoid to test the
                         # well classified elements
-                        pred_S_y = self.estimator_.predict(S_x)
+                        pred_S_y = self.estimators_[-1].predict(S_x)
                         good_classif_label = np.unique(
                             np.append(idx_maj_sample, np.flatnonzero(pred_S_y == S_y))
                         )
@@ -222,5 +247,22 @@ CondensedNearestNeighbour # doctest: +SKIP
 
         return _safe_indexing(X, idx_under), _safe_indexing(y, idx_under)
 
+    @property
+    def estimator_(self):
+        """Last fitted k-NN estimator."""
+        warnings.warn(
+            (
+                "`estimator_` attribute has been deprecated in 0.12 and will be "
+                "removed in 0.14. Use `estimators_` instead."
+            ),
+            FutureWarning,
+        )
+        return self.estimators_[-1]
+
     def _more_tags(self):
         return {"sample_indices": True}
+
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.sampler_tags.sample_indices = True
+        return tags

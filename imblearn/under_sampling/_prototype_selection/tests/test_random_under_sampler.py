@@ -4,10 +4,11 @@
 # License: MIT
 
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
 import pytest
-
+from sklearn.datasets import make_classification
 from sklearn.utils._testing import assert_array_equal
 
 from imblearn.under_sampling import RandomUnderSampler
@@ -54,8 +55,7 @@ def test_rus_fit_resample(as_frame):
 
     if as_frame:
         assert hasattr(X_resampled, "loc")
-        # FIXME: we should use to_numpy with pandas >= 0.25
-        X_resampled = X_resampled.values
+        X_resampled = X_resampled.to_numpy()
 
     assert_array_equal(X_resampled, X_gt)
     assert_array_equal(y_resampled, y_gt)
@@ -131,3 +131,56 @@ def test_random_under_sampling_nan_inf():
     assert y_res.shape == (6,)
     assert X_res.shape == (6, 2)
     assert np.any(~np.isfinite(X_res))
+
+
+@pytest.mark.parametrize(
+    "sampling_strategy", ["auto", "majority", "not minority", "not majority", "all"]
+)
+def test_random_under_sampler_strings(sampling_strategy):
+    """Check that we support all supposed strings as `sampling_strategy` in
+    a sampler inheriting from `BaseUnderSampler`."""
+
+    X, y = make_classification(
+        n_samples=100,
+        n_clusters_per_class=1,
+        n_classes=3,
+        weights=[0.1, 0.3, 0.6],
+        random_state=0,
+    )
+    RandomUnderSampler(sampling_strategy=sampling_strategy).fit_resample(X, y)
+
+
+def test_random_under_sampling_datetime():
+    """Check that we don't convert input data and only sample from it."""
+    pd = pytest.importorskip("pandas")
+    X = pd.DataFrame({"label": [0, 0, 0, 1], "td": [datetime.now()] * 4})
+    y = X["label"]
+    rus = RandomUnderSampler(random_state=0)
+    X_res, y_res = rus.fit_resample(X, y)
+
+    pd.testing.assert_series_equal(X_res.dtypes, X.dtypes)
+    pd.testing.assert_index_equal(X_res.index, y_res.index)
+    assert_array_equal(y_res.to_numpy(), np.array([0, 1]))
+
+
+def test_random_under_sampler_full_nat():
+    """Check that we can return timedelta columns full of NaT.
+
+    Non-regression test for:
+    https://github.com/scikit-learn-contrib/imbalanced-learn/issues/1055
+    """
+    pd = pytest.importorskip("pandas")
+
+    X = pd.DataFrame(
+        {
+            "col_str": ["abc", "def", "xyz"],
+            "col_timedelta": pd.to_timedelta([np.nan, np.nan, np.nan]),
+        }
+    )
+    y = np.array([0, 0, 1])
+
+    X_res, y_res = RandomUnderSampler().fit_resample(X, y)
+    assert X_res.shape == (2, 2)
+    assert y_res.shape == (2,)
+
+    assert X_res["col_timedelta"].dtype == "timedelta64[ns]"

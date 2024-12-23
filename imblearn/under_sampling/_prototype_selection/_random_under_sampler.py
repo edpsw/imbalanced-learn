@@ -5,15 +5,13 @@
 # License: MIT
 
 import numpy as np
+from sklearn.utils import _safe_indexing, check_random_state
 
-from sklearn.utils import check_random_state
-from sklearn.utils import _safe_indexing
-
-from ..base import BaseUnderSampler
-from ...utils import check_target_type
-from ...utils import Substitution
+from ...utils import Substitution, check_target_type
 from ...utils._docstring import _random_state_docstring
-from ...utils._validation import _deprecate_positional_args
+from ...utils._sklearn_compat import validate_data
+from ...utils._validation import _check_X
+from ..base import BaseUnderSampler
 
 
 @Substitution(
@@ -54,6 +52,12 @@ class RandomUnderSampler(BaseUnderSampler):
 
         .. versionadded:: 0.9
 
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
+
     See Also
     --------
     NearMiss : Undersample using near-miss samples.
@@ -68,8 +72,7 @@ class RandomUnderSampler(BaseUnderSampler):
     --------
     >>> from collections import Counter
     >>> from sklearn.datasets import make_classification
-    >>> from imblearn.under_sampling import \
-RandomUnderSampler # doctest: +NORMALIZE_WHITESPACE
+    >>> from imblearn.under_sampling import RandomUnderSampler
     >>> X, y = make_classification(n_classes=2, class_sep=2,
     ...  weights=[0.1, 0.9], n_informative=3, n_redundant=1, flip_y=0,
     ... n_features=20, n_clusters_per_class=1, n_samples=1000, random_state=10)
@@ -81,7 +84,12 @@ RandomUnderSampler # doctest: +NORMALIZE_WHITESPACE
     Resampled dataset shape Counter({{0: 100, 1: 100}})
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseUnderSampler._parameter_constraints,
+        "replacement": ["boolean"],
+        "random_state": ["random_state"],
+    }
+
     def __init__(
         self, *, sampling_strategy="auto", random_state=None, replacement=False
     ):
@@ -91,14 +99,8 @@ RandomUnderSampler # doctest: +NORMALIZE_WHITESPACE
 
     def _check_X_y(self, X, y):
         y, binarize_y = check_target_type(y, indicate_one_vs_all=True)
-        X, y = self._validate_data(
-            X,
-            y,
-            reset=True,
-            accept_sparse=["csr", "csc"],
-            dtype=None,
-            force_all_finite=False,
-        )
+        X = _check_X(X)
+        X, y = validate_data(self, X=X, y=y, reset=True, skip_check_array=True)
         return X, y, binarize_y
 
     def _fit_resample(self, X, y):
@@ -134,4 +136,14 @@ RandomUnderSampler # doctest: +NORMALIZE_WHITESPACE
             "X_types": ["2darray", "string", "sparse", "dataframe"],
             "sample_indices": True,
             "allow_nan": True,
+            "_xfail_checks": {
+                "check_complex_data": "Robust to this type of data.",
+            },
         }
+
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.input_tags.allow_nan = True
+        tags.input_tags.string = True
+        tags.sampler_tags.sample_indices = True
+        return tags

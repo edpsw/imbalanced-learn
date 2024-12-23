@@ -3,12 +3,17 @@
 # Authors: Guillaume Lemaitre <g.lemaitre58@gmail.com>
 # License: MIT
 
+import numbers
+
 import numpy as np
 from scipy.spatial import distance_matrix
 from sklearn.base import BaseEstimator
 from sklearn.utils import check_consistent_length
+from sklearn.utils._param_validation import StrOptions
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_is_fitted
+
+from ..utils._sklearn_compat import _fit_context, check_array, validate_data
 
 
 class ValueDifferenceMetric(BaseEstimator):
@@ -66,6 +71,17 @@ class ValueDifferenceMetric(BaseEstimator):
         List of length `n_features` containing the conditional probabilities
         for each category given a class.
 
+    n_features_in_ : int
+        Number of features in the input dataset.
+
+        .. versionadded:: 0.10
+
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
+
     See Also
     --------
     sklearn.neighbors.DistanceMetric : Interface for fast metric computation.
@@ -103,11 +119,18 @@ class ValueDifferenceMetric(BaseEstimator):
            [1.96,  1.44,  0.  ]])
     """
 
+    _parameter_constraints: dict = {
+        "n_categories": [StrOptions({"auto"}), "array-like"],
+        "k": [numbers.Integral],
+        "r": [numbers.Integral],
+    }
+
     def __init__(self, *, n_categories="auto", k=1, r=2):
         self.n_categories = n_categories
         self.k = k
         self.r = r
 
+    @_fit_context(prefer_skip_nested_validation=True)
     def fit(self, X, y):
         """Compute the necessary statistics from the training set.
 
@@ -125,8 +148,10 @@ class ValueDifferenceMetric(BaseEstimator):
         self : object
             Return the instance itself.
         """
+        self._validate_params()
         check_consistent_length(X, y)
-        X, y = self._validate_data(X, y, reset=True, dtype=np.int32)
+        X, y = validate_data(self, X=X, y=y, reset=True, dtype=np.int32)
+        X = check_array(X, ensure_non_negative=True)
 
         if isinstance(self.n_categories, str) and self.n_categories == "auto":
             # categories are expected to be encoded from 0 to n_categories - 1
@@ -134,12 +159,12 @@ class ValueDifferenceMetric(BaseEstimator):
         else:
             if len(self.n_categories) != self.n_features_in_:
                 raise ValueError(
-                    f"The length of n_categories is not consistent with the "
+                    "The length of n_categories is not consistent with the "
                     f"number of feature in X. Got {len(self.n_categories)} "
                     f"elements in n_categories and {self.n_features_in_} in "
-                    f"X."
+                    "X."
                 )
-            self.n_categories_ = np.array(self.n_categories, copy=False)
+            self.n_categories_ = np.asarray(self.n_categories)
         classes = unique_labels(y)
 
         # list of length n_features of ndarray (n_categories, n_classes)
@@ -185,11 +210,11 @@ class ValueDifferenceMetric(BaseEstimator):
             The VDM pairwise distance.
         """
         check_is_fitted(self)
-        X = self._validate_data(X, reset=False, dtype=np.int32)
+        X = check_array(X, ensure_non_negative=True, dtype=np.int32)
         n_samples_X = X.shape[0]
 
         if Y is not None:
-            Y = self._validate_data(Y, reset=False, dtype=np.int32)
+            Y = check_array(Y, ensure_non_negative=True, dtype=np.int32)
             n_samples_Y = Y.shape[0]
         else:
             n_samples_Y = n_samples_X
@@ -205,3 +230,13 @@ class ValueDifferenceMetric(BaseEstimator):
                 distance_matrix(proba_feature_X, proba_feature_Y, p=self.k) ** self.r
             )
         return distance
+
+    def _more_tags(self):
+        return {
+            "requires_positive_X": True,  # X should be encoded with OrdinalEncoder
+        }
+
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.input_tags.positive_only = True
+        return tags

@@ -29,8 +29,9 @@ which accepts arrays, matrices, or sparse matrices as arguments, the following
 should be used when applicable.
 
 - :func:`check_neighbors_object`: Check the objects is consistent to be a NN.
-- :func:`check_target_type`: Check the target types to be conform to the current sam  plers.
-- :func:`check_sampling_strategy`: Checks that sampling target is onsistent with
+- :func:`check_target_type`: Check the target types to be conform to the current
+  samplers.
+- :func:`check_sampling_strategy`: Checks that sampling target is consistent with
   the type and return a dictionary containing each targeted class with its
   corresponding number of pixel.
 
@@ -74,7 +75,7 @@ E.g., renaming an attribute ``labels_`` to ``classes_`` can be done as::
     def labels_(self):
         return self.classes_
 
-If a parameter has to be deprecated, use ``DeprecationWarning`` appropriately.
+If a parameter has to be deprecated, use ``FutureWarning`` appropriately.
 In the following example, k is deprecated and renamed to n_clusters::
 
     import warnings
@@ -104,49 +105,6 @@ same information as the deprecation warning as explained above. Use the
 On the top of all the functionality provided by scikit-learn. imbalanced-learn
 provides :func:`deprecate_parameter`: which is used to deprecate a sampler's
 parameter (attribute) by another one.
-
-Testing utilities
-~~~~~~~~~~~~~~~~~
-Currently, imbalanced-learn provide a warning management utility. This feature
-is going to be merge in pytest and will be removed when the pytest release will
-have it.
-
-If using Python 2.7 or above, you may use this function as a
-context manager::
-
-    >>> import warnings
-    >>> from imblearn.utils.testing import warns
-    >>> with warns(RuntimeWarning):
-    ...    warnings.warn("my runtime warning", RuntimeWarning)
-
-    >>> with warns(RuntimeWarning):
-    ...    pass
-    Traceback (most recent call last):
-      ...
-    Failed: DID NOT WARN. No warnings of type ...RuntimeWarning... was emitted...
-
-    >>> with warns(RuntimeWarning):
-    ...    warnings.warn(UserWarning)
-    Traceback (most recent call last):
-      ...
-    Failed: DID NOT WARN. No warnings of type ...RuntimeWarning... was emitted...
-
-In the context manager form you may use the keyword argument ``match`` to assert
-that the exception matches a text or regex::
-
-    >>> import warnings
-    >>> from imblearn.utils.testing import warns
-    >>> with warns(UserWarning, match='must be 0 or None'):
-    ...     warnings.warn("value must be 0 or None", UserWarning)
-
-    >>> with warns(UserWarning, match=r'must be \d+$'):
-    ...     warnings.warn("value must be 42", UserWarning)
-
-    >>> with warns(UserWarning, match=r'must be \d+$'):
-    ...     warnings.warn("this is not here", UserWarning)
-    Traceback (most recent call last):
-      ...
-    AssertionError: 'must be \d+$' pattern not found in ['this is not here']
 
 Making a release
 ----------------

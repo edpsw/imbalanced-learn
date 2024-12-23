@@ -3,13 +3,10 @@
 #          Christos Aridas
 # License: MIT
 
-import pytest
 import numpy as np
-
-
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.naive_bayes import GaussianNB as NB
+from sklearn.pipeline import make_pipeline
 from sklearn.utils._testing import assert_array_equal
 
 from imblearn.under_sampling import InstanceHardnessThreshold
@@ -77,15 +74,6 @@ def test_iht_fit_resample_class_obj():
     assert y_resampled.shape == (12,)
 
 
-def test_iht_fit_resample_wrong_class_obj():
-    from sklearn.cluster import KMeans
-
-    est = KMeans()
-    iht = InstanceHardnessThreshold(estimator=est, random_state=RND_SEED)
-    with pytest.raises(ValueError, match="Invalid parameter `estimator`"):
-        iht.fit_resample(X, Y)
-
-
 def test_iht_reproducibility():
     from sklearn.datasets import load_digits
 
@@ -98,3 +86,27 @@ def test_iht_reproducibility():
         idx_sampled.append(iht.sample_indices_.copy())
     for idx_1, idx_2 in zip(idx_sampled, idx_sampled[1:]):
         assert_array_equal(idx_1, idx_2)
+
+
+def test_iht_fit_resample_default_estimator():
+    iht = InstanceHardnessThreshold(estimator=None, random_state=RND_SEED)
+    X_resampled, y_resampled = iht.fit_resample(X, Y)
+    assert isinstance(iht.estimator_, RandomForestClassifier)
+    assert X_resampled.shape == (12, 2)
+    assert y_resampled.shape == (12,)
+
+
+def test_iht_estimator_pipeline():
+    """Check that we can pass a pipeline containing a classifier.
+
+    Checking if we have a classifier should not be based on inheriting from
+    `ClassifierMixin`.
+
+    Non-regression test for:
+    https://github.com/scikit-learn-contrib/imbalanced-learn/pull/1049
+    """
+    model = make_pipeline(GradientBoostingClassifier(random_state=RND_SEED))
+    iht = InstanceHardnessThreshold(estimator=model, random_state=RND_SEED)
+    X_resampled, y_resampled = iht.fit_resample(X, Y)
+    assert X_resampled.shape == (12, 2)
+    assert y_resampled.shape == (12,)

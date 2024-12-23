@@ -4,7 +4,7 @@ Evaluate classification by compiling a report
 =============================================
 
 Specific metrics have been developed to evaluate classifier which has been
-trained using imbalanced data. "mod:`imblearn` provides a classification report
+trained using imbalanced data. :mod:`imblearn` provides a classification report
 similar to :mod:`sklearn`, with additional metrics specific to imbalanced
 learning problem.
 """
@@ -14,9 +14,9 @@ learning problem.
 
 
 from sklearn import datasets
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import LinearSVC
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
 from imblearn import over_sampling as os
 from imblearn import pipeline as pl
@@ -43,7 +43,7 @@ X, y = datasets.make_classification(
 pipeline = pl.make_pipeline(
     StandardScaler(),
     os.SMOTE(random_state=RANDOM_STATE),
-    LinearSVC(max_iter=10_000, random_state=RANDOM_STATE),
+    LogisticRegression(max_iter=10_000),
 )
 
 # Split the data

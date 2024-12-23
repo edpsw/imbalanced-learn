@@ -9,15 +9,15 @@ from numbers import Real
 
 import numpy as np
 from scipy import sparse
-from sklearn.utils import check_array, check_random_state
-from sklearn.utils import _safe_indexing
+from sklearn.utils import _safe_indexing, check_array, check_random_state
+from sklearn.utils._param_validation import Interval
 from sklearn.utils.sparsefuncs import mean_variance_axis
 
-from .base import BaseOverSampler
-from ..utils import check_target_type
-from ..utils import Substitution
+from ..utils import Substitution, check_target_type
 from ..utils._docstring import _random_state_docstring
-from ..utils._validation import _deprecate_positional_args
+from ..utils._sklearn_compat import validate_data
+from ..utils._validation import _check_X
+from .base import BaseOverSampler
 
 
 @Substitution(
@@ -78,6 +78,12 @@ class RandomOverSampler(BaseOverSampler):
 
         .. versionadded:: 0.9
 
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
+
     See Also
     --------
     BorderlineSMOTE : Over-sample using the borderline-SMOTE variant.
@@ -120,8 +126,7 @@ class RandomOverSampler(BaseOverSampler):
     --------
     >>> from collections import Counter
     >>> from sklearn.datasets import make_classification
-    >>> from imblearn.over_sampling import \
-RandomOverSampler # doctest: +NORMALIZE_WHITESPACE
+    >>> from imblearn.over_sampling import RandomOverSampler
     >>> X, y = make_classification(n_classes=2, class_sep=2,
     ... weights=[0.1, 0.9], n_informative=3, n_redundant=1, flip_y=0,
     ... n_features=20, n_clusters_per_class=1, n_samples=1000, random_state=10)
@@ -133,7 +138,11 @@ RandomOverSampler # doctest: +NORMALIZE_WHITESPACE
     Resampled dataset shape Counter({{0: 900, 1: 900}})
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseOverSampler._parameter_constraints,
+        "shrinkage": [Interval(Real, 0, None, closed="left"), dict, None],
+    }
+
     def __init__(
         self,
         *,
@@ -147,14 +156,8 @@ RandomOverSampler # doctest: +NORMALIZE_WHITESPACE
 
     def _check_X_y(self, X, y):
         y, binarize_y = check_target_type(y, indicate_one_vs_all=True)
-        X, y = self._validate_data(
-            X,
-            y,
-            reset=True,
-            accept_sparse=["csr", "csc"],
-            dtype=None,
-            force_all_finite=False,
-        )
+        X = _check_X(X)
+        validate_data(self, X=X, y=y, reset=True, skip_check_array=True)
         return X, y, binarize_y
 
     def _fit_resample(self, X, y):
@@ -166,12 +169,6 @@ RandomOverSampler # doctest: +NORMALIZE_WHITESPACE
             }
         elif self.shrinkage is None or isinstance(self.shrinkage, Mapping):
             self.shrinkage_ = self.shrinkage
-        else:
-            raise ValueError(
-                f"`shrinkage` should either be a positive floating number or "
-                f"a dictionary mapping a class to a positive floating number. "
-                f"Got {repr(self.shrinkage)} instead."
-            )
 
         if self.shrinkage_ is not None:
             missing_shrinkage_keys = (
@@ -179,15 +176,15 @@ RandomOverSampler # doctest: +NORMALIZE_WHITESPACE
             )
             if missing_shrinkage_keys:
                 raise ValueError(
-                    f"`shrinkage` should contain a shrinkage factor for "
-                    f"each class that will be resampled. The missing "
+                    "`shrinkage` should contain a shrinkage factor for "
+                    "each class that will be resampled. The missing "
                     f"classes are: {repr(missing_shrinkage_keys)}"
                 )
 
             for klass, shrink_factor in self.shrinkage_.items():
                 if shrink_factor < 0:
                     raise ValueError(
-                        f"The shrinkage factor needs to be >= 0. "
+                        "The shrinkage factor needs to be >= 0. "
                         f"Got {shrink_factor} for class {klass}."
                     )
 
@@ -257,4 +254,14 @@ RandomOverSampler # doctest: +NORMALIZE_WHITESPACE
             "X_types": ["2darray", "string", "sparse", "dataframe"],
             "sample_indices": True,
             "allow_nan": True,
+            "_xfail_checks": {
+                "check_complex_data": "Robust to this type of data.",
+            },
         }
+
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.input_tags.allow_nan = True
+        tags.input_tags.string = True
+        tags.sampler_tags.sample_indices = True
+        return tags

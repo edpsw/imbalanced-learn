@@ -4,6 +4,11 @@ Base class for the under-sampling method.
 # Authors: Guillaume Lemaitre <g.lemaitre58@gmail.com>
 # License: MIT
 
+import numbers
+from collections.abc import Mapping
+
+from sklearn.utils._param_validation import Interval, StrOptions
+
 from ..base import BaseSampler
 
 
@@ -16,7 +21,8 @@ class BaseUnderSampler(BaseSampler):
 
     _sampling_type = "under-sampling"
 
-    _sampling_strategy_docstring = """sampling_strategy : float, str, dict, callable, default='auto'
+    _sampling_strategy_docstring = (
+        """sampling_strategy : float, str, dict, callable, default='auto'
         Sampling information to sample the data set.
 
         - When ``float``, it corresponds to the desired ratio of the number of
@@ -53,6 +59,16 @@ class BaseUnderSampler(BaseSampler):
           correspond to the targeted classes. The values correspond to the
           desired number of samples for each class.
         """.rstrip()
+    )  # noqa: E501
+
+    _parameter_constraints: dict = {
+        "sampling_strategy": [
+            Interval(numbers.Real, 0, 1, closed="right"),
+            StrOptions({"auto", "majority", "not minority", "not majority", "all"}),
+            Mapping,
+            callable,
+        ],
+    }
 
 
 class BaseCleaningSampler(BaseSampler):
@@ -88,3 +104,12 @@ class BaseCleaningSampler(BaseSampler):
           correspond to the targeted classes. The values correspond to the
           desired number of samples for each class.
         """.rstrip()
+
+    _parameter_constraints: dict = {
+        "sampling_strategy": [
+            Interval(numbers.Real, 0, 1, closed="right"),
+            StrOptions({"auto", "majority", "not minority", "not majority", "all"}),
+            list,
+            callable,
+        ],
+    }

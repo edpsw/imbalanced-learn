@@ -7,9 +7,35 @@ Getting Started
 Prerequisites
 =============
 
-You can find the complete list of the dependencies in the following table:
+.. |PythonMinVersion| replace:: 3.10
+.. |NumPyMinVersion| replace:: 1.24.3
+.. |SciPyMinVersion| replace:: 1.10.1
+.. |ScikitLearnMinVersion| replace:: 1.3.2
+.. |MatplotlibMinVersion| replace:: 3.7.3
+.. |PandasMinVersion| replace:: 1.5.3
+.. |TensorflowMinVersion| replace:: 2.13.1
+.. |KerasMinVersion| replace:: 3.0.5
+.. |SeabornMinVersion| replace:: 0.12.2
+.. |PytestMinVersion| replace:: 7.2.2
 
-.. include:: min_dependency_table.rst
+`imbalanced-learn` requires the following dependencies:
+
+- Python (>= |PythonMinVersion|)
+- NumPy (>= |NumPyMinVersion|)
+- SciPy (>= |SciPyMinVersion|)
+- Scikit-learn (>= |ScikitLearnMinVersion|)
+- Pytest (>= |PytestMinVersion|)
+
+Additionally, `imbalanced-learn` requires the following optional dependencies:
+
+- Pandas (>= |PandasMinVersion|) for dealing with dataframes
+- Tensorflow (>= |TensorflowMinVersion|) for dealing with TensorFlow models
+- Keras (>= |KerasMinVersion|) for dealing with Keras models
+
+The examples will requires the following additional dependencies:
+
+- Matplotlib (>= |MatplotlibMinVersion|)
+- Seaborn (>= |SeabornMinVersion|)
 
 Install
 =======
@@ -20,11 +46,29 @@ From PyPi or conda-forge repositories
 imbalanced-learn is currently available on the PyPi's repositories and you can
 install it via `pip`::
 
-  pip install -U imbalanced-learn
+  pip install imbalanced-learn
 
-The package is release also in Anaconda Cloud platform::
+The package is released also on the conda-forge repositories and you can install
+it with `conda` (or `mamba`)::
 
   conda install -c conda-forge imbalanced-learn
+
+Intel optimizations via scikit-learn-intelex
+--------------------------------------------
+
+Imbalanced-learn relies entirely on scikit-learn algorithms. Intel provides an
+optimized version of scikit-learn for Intel hardwares, called scikit-learn-intelex.
+Installing scikit-learn-intelex and patching scikit-learn will activate the
+Intel optimizations.
+
+You can refer to the following
+`blog post <https://medium.com/intel-analytics-software/why-pay-more-for-machine-learning-893683bd78e4>`_
+for some benchmarks.
+
+Refer to the following documentation for instructions:
+
+- `Installation guide <https://intel.github.io/scikit-learn-intelex/installation.html>`_.
+- `Patching guide <https://intel.github.io/scikit-learn-intelex/what-is-patching.html>`_.
 
 From source available on GitHub
 -------------------------------

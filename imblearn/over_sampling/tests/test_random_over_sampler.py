@@ -4,13 +4,16 @@
 # License: MIT
 
 from collections import Counter
+from datetime import datetime
 
 import numpy as np
 import pytest
-
-from sklearn.utils._testing import assert_allclose
-from sklearn.utils._testing import assert_array_equal
-from sklearn.utils._testing import _convert_container
+from sklearn.datasets import make_classification
+from sklearn.utils._testing import (
+    _convert_container,
+    assert_allclose,
+    assert_array_equal,
+)
 
 from imblearn.over_sampling import RandomOverSampler
 
@@ -43,7 +46,9 @@ def test_ros_init():
     assert ros.random_state == RND_SEED
 
 
-@pytest.mark.parametrize("params", [{"shrinkage": None}, {"shrinkage": 0}])
+@pytest.mark.parametrize(
+    "params", [{"shrinkage": None}, {"shrinkage": 0}, {"shrinkage": {0: 0}}]
+)
 @pytest.mark.parametrize("X_type", ["array", "dataframe"])
 def test_ros_fit_resample(X_type, data, params):
     X, Y = data
@@ -72,8 +77,7 @@ def test_ros_fit_resample(X_type, data, params):
 
     if X_type == "dataframe":
         assert hasattr(X_resampled, "loc")
-        # FIXME: we should use to_numpy with pandas >= 0.25
-        X_resampled = X_resampled.values
+        X_resampled = X_resampled.to_numpy()
 
     assert_allclose(X_resampled, X_gt)
     assert_array_equal(y_resampled, y_gt)
@@ -243,14 +247,7 @@ def test_random_over_sampler_shrinkage_behaviour(data):
     "shrinkage, err_msg",
     [
         ({}, "`shrinkage` should contain a shrinkage factor for each class"),
-        (-1, "The shrinkage factor needs to be >= 0"),
         ({0: -1}, "The shrinkage factor needs to be >= 0"),
-        (
-            [
-                1,
-            ],
-            "`shrinkage` should either be a positive floating number or",
-        ),
     ],
 )
 def test_random_over_sampler_shrinkage_error(data, shrinkage, err_msg):
@@ -259,3 +256,56 @@ def test_random_over_sampler_shrinkage_error(data, shrinkage, err_msg):
     ros = RandomOverSampler(shrinkage=shrinkage)
     with pytest.raises(ValueError, match=err_msg):
         ros.fit_resample(X, y)
+
+
+@pytest.mark.parametrize(
+    "sampling_strategy", ["auto", "minority", "not minority", "not majority", "all"]
+)
+def test_random_over_sampler_strings(sampling_strategy):
+    """Check that we support all supposed strings as `sampling_strategy` in
+    a sampler inheriting from `BaseOverSampler`."""
+
+    X, y = make_classification(
+        n_samples=100,
+        n_clusters_per_class=1,
+        n_classes=3,
+        weights=[0.1, 0.3, 0.6],
+        random_state=0,
+    )
+    RandomOverSampler(sampling_strategy=sampling_strategy).fit_resample(X, y)
+
+
+def test_random_over_sampling_datetime():
+    """Check that we don't convert input data and only sample from it."""
+    pd = pytest.importorskip("pandas")
+    X = pd.DataFrame({"label": [0, 0, 0, 1], "td": [datetime.now()] * 4})
+    y = X["label"]
+    ros = RandomOverSampler(random_state=0)
+    X_res, y_res = ros.fit_resample(X, y)
+
+    pd.testing.assert_series_equal(X_res.dtypes, X.dtypes)
+    pd.testing.assert_index_equal(X_res.index, y_res.index)
+    assert_array_equal(y_res.to_numpy(), np.array([0, 0, 0, 1, 1, 1]))
+
+
+def test_random_over_sampler_full_nat():
+    """Check that we can return timedelta columns full of NaT.
+
+    Non-regression test for:
+    https://github.com/scikit-learn-contrib/imbalanced-learn/issues/1055
+    """
+    pd = pytest.importorskip("pandas")
+
+    X = pd.DataFrame(
+        {
+            "col_str": ["abc", "def", "xyz"],
+            "col_timedelta": pd.to_timedelta([np.nan, np.nan, np.nan]),
+        }
+    )
+    y = np.array([0, 0, 1])
+
+    X_res, y_res = RandomOverSampler().fit_resample(X, y)
+    assert X_res.shape == (4, 2)
+    assert y_res.shape == (4,)
+
+    assert X_res["col_timedelta"].dtype == "timedelta64[ns]"

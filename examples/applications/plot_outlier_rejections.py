@@ -13,10 +13,9 @@ the current scikit-learn pipeline.
 # Authors: Guillaume Lemaitre <g.lemaitre58@gmail.com>
 # License: MIT
 
-import numpy as np
 import matplotlib.pyplot as plt
-
-from sklearn.datasets import make_moons, make_blobs
+import numpy as np
+from sklearn.datasets import make_blobs, make_moons
 from sklearn.ensemble import IsolationForest
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
@@ -110,12 +109,12 @@ plot_scatter(X_inliers, y_inliers, "Training data without outliers")
 
 pipe = make_pipeline(
     FunctionSampler(func=outlier_rejection),
-    LogisticRegression(solver="lbfgs", multi_class="auto", random_state=rng),
+    LogisticRegression(random_state=rng),
 )
 y_pred = pipe.fit(X_train, y_train).predict(X_test)
 print(classification_report(y_test, y_pred))
 
-clf = LogisticRegression(solver="lbfgs", multi_class="auto", random_state=rng)
+clf = LogisticRegression(random_state=rng)
 y_pred = clf.fit(X_train, y_train).predict(X_test)
 print(classification_report(y_test, y_pred))
 

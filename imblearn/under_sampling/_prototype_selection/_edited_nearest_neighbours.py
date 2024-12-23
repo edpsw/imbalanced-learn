@@ -1,4 +1,4 @@
-"""Class to perform under-sampling based on the edited nearest neighbour
+"""Classes to perform under-sampling based on the edited nearest neighbour
 method."""
 
 # Authors: Guillaume Lemaitre <g.lemaitre58@gmail.com>
@@ -6,18 +6,17 @@ method."""
 #          Christos Aridas
 # License: MIT
 
+import numbers
 from collections import Counter
 
 import numpy as np
 from scipy.stats import mode
-
 from sklearn.utils import _safe_indexing
+from sklearn.utils._param_validation import HasMethods, Interval, StrOptions
 
-from ..base import BaseCleaningSampler
-from ...utils import check_neighbors_object
-from ...utils import Substitution
+from ...utils import Substitution, check_neighbors_object
 from ...utils._docstring import _n_jobs_docstring
-from ...utils._validation import _deprecate_positional_args
+from ..base import BaseCleaningSampler
 
 SEL_KIND = ("all", "mode")
 
@@ -29,8 +28,9 @@ SEL_KIND = ("all", "mode")
 class EditedNearestNeighbours(BaseCleaningSampler):
     """Undersample based on the edited nearest neighbour method.
 
-    This method will clean the database by removing samples close to the
-    decision boundary.
+    This method cleans the dataset by removing samples close to the
+    decision boundary. It removes observations from the majority class or
+    classes when any or most of its closest neighours are from a different class.
 
     Read more in the :ref:`User Guide <edited_nearest_neighbors>`.
 
@@ -39,21 +39,23 @@ class EditedNearestNeighbours(BaseCleaningSampler):
     {sampling_strategy}
 
     n_neighbors : int or object, default=3
-        If ``int``, size of the neighbourhood to consider to compute the
-        nearest neighbors. If object, an estimator that inherits from
-        :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
-        find the nearest-neighbors.
+        If ``int``, size of the neighbourhood to consider for the undersampling, i.e.,
+        if `n_neighbors=3`, a sample will be removed when any or most of its 3 closest
+        neighbours are from a different class. If object, an estimator that inherits
+        from :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
+        find the nearest-neighbors. Note that if you want to examine the 3 closest
+        neighbours of a sample for the undersampling, you need to pass a 4-KNN.
 
     kind_sel : {{'all', 'mode'}}, default='all'
-        Strategy to use in order to exclude samples.
+        Strategy to use to exclude samples.
 
-        - If ``'all'``, all neighbours will have to agree with the samples of
-          interest to not be excluded.
-        - If ``'mode'``, the majority vote of the neighbours will be used in
-          order to exclude a sample.
+        - If ``'all'``, all neighbours should be of the same class of the examined
+          sample for it not be excluded.
+        - If ``'mode'``, most neighbours should be of the same class of the examined
+          sample for it not be excluded.
 
         The strategy `"all"` will be less conservative than `'mode'`. Thus,
-        more samples will be removed when `kind_sel="all"` generally.
+        more samples will be removed when `kind_sel="all"`, generally.
 
     {n_jobs}
 
@@ -61,7 +63,7 @@ class EditedNearestNeighbours(BaseCleaningSampler):
     ----------
     sampling_strategy_ : dict
         Dictionary containing the information to sample the dataset. The keys
-        corresponds to the class labels from which to sample and the values
+        correspond to the class labels from which to sample and the values
         are the number of samples to sample.
 
     nn_ : estimator object
@@ -77,13 +79,19 @@ class EditedNearestNeighbours(BaseCleaningSampler):
 
         .. versionadded:: 0.9
 
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
+
     See Also
     --------
     CondensedNearestNeighbour : Undersample by condensing samples.
 
-    RepeatedEditedNearestNeighbours : Undersample by repeating ENN algorithm.
+    RepeatedEditedNearestNeighbours : Undersample by repeating the ENN algorithm.
 
-    AllKNN : Undersample using ENN and various number of neighbours.
+    AllKNN : Undersample using ENN with varying neighbours.
 
     Notes
     -----
@@ -103,8 +111,7 @@ class EditedNearestNeighbours(BaseCleaningSampler):
 
     >>> from collections import Counter
     >>> from sklearn.datasets import make_classification
-    >>> from imblearn.under_sampling import \
-EditedNearestNeighbours # doctest: +NORMALIZE_WHITESPACE
+    >>> from imblearn.under_sampling import EditedNearestNeighbours
     >>> X, y = make_classification(n_classes=2, class_sep=2,
     ... weights=[0.1, 0.9], n_informative=3, n_redundant=1, flip_y=0,
     ... n_features=20, n_clusters_per_class=1, n_samples=1000, random_state=10)
@@ -116,7 +123,16 @@ EditedNearestNeighbours # doctest: +NORMALIZE_WHITESPACE
     Resampled dataset shape Counter({{1: 887, 0: 100}})
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseCleaningSampler._parameter_constraints,
+        "n_neighbors": [
+            Interval(numbers.Integral, 1, None, closed="left"),
+            HasMethods(["kneighbors", "kneighbors_graph"]),
+        ],
+        "kind_sel": [StrOptions({"all", "mode"})],
+        "n_jobs": [numbers.Integral, None],
+    }
+
     def __init__(
         self,
         *,
@@ -137,9 +153,6 @@ EditedNearestNeighbours # doctest: +NORMALIZE_WHITESPACE
         )
         self.nn_.set_params(**{"n_jobs": self.n_jobs})
 
-        if self.kind_sel not in SEL_KIND:
-            raise NotImplementedError
-
     def _fit_resample(self, X, y):
         self._validate_estimator()
 
@@ -155,7 +168,7 @@ EditedNearestNeighbours # doctest: +NORMALIZE_WHITESPACE
                 nnhood_idx = self.nn_.kneighbors(X_class, return_distance=False)[:, 1:]
                 nnhood_label = y[nnhood_idx]
                 if self.kind_sel == "mode":
-                    nnhood_label, _ = mode(nnhood_label, axis=1)
+                    nnhood_label, _ = mode(nnhood_label, axis=1, keepdims=False)
                     nnhood_bool = np.ravel(nnhood_label) == y_class
                 elif self.kind_sel == "all":
                     nnhood_label = nnhood_label == target_class
@@ -179,6 +192,11 @@ EditedNearestNeighbours # doctest: +NORMALIZE_WHITESPACE
     def _more_tags(self):
         return {"sample_indices": True}
 
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.sampler_tags.sample_indices = True
+        return tags
+
 
 @Substitution(
     sampling_strategy=BaseCleaningSampler._sampling_strategy_docstring,
@@ -187,7 +205,11 @@ EditedNearestNeighbours # doctest: +NORMALIZE_WHITESPACE
 class RepeatedEditedNearestNeighbours(BaseCleaningSampler):
     """Undersample based on the repeated edited nearest neighbour method.
 
-    This method will repeat several time the ENN algorithm.
+    This method repeats the :class:`EditedNearestNeighbours` algorithm several times.
+    The repetitions will stop when i) the maximum number of iterations is reached,
+    or ii) no more observations are being removed, or iii) one of the majority classes
+    becomes a minority class or iv) one of the majority classes disappears
+    during undersampling.
 
     Read more in the :ref:`User Guide <edited_nearest_neighbors>`.
 
@@ -196,25 +218,26 @@ class RepeatedEditedNearestNeighbours(BaseCleaningSampler):
     {sampling_strategy}
 
     n_neighbors : int or object, default=3
-        If ``int``, size of the neighbourhood to consider to compute the
-        nearest neighbors. If object, an estimator that inherits from
-        :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
-        find the nearest-neighbors.
+        If ``int``, size of the neighbourhood to consider for the undersampling, i.e.,
+        if `n_neighbors=3`, a sample will be removed when any or most of its 3 closest
+        neighbours are from a different class. If object, an estimator that inherits
+        from :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
+        find the nearest-neighbors. Note that if you want to examine the 3 closest
+        neighbours of a sample for the undersampling, you need to pass a 4-KNN.
 
     max_iter : int, default=100
-        Maximum number of iterations of the edited nearest neighbours
-        algorithm for a single run.
+        Maximum number of iterations of the edited nearest neighbours.
 
     kind_sel : {{'all', 'mode'}}, default='all'
-        Strategy to use in order to exclude samples.
+        Strategy to use to exclude samples.
 
-        - If ``'all'``, all neighbours will have to agree with the samples of
-          interest to not be excluded.
-        - If ``'mode'``, the majority vote of the neighbours will be used in
-          order to exclude a sample.
+        - If ``'all'``, all neighbours should be of the same class of the examined
+          sample for it not be excluded.
+        - If ``'mode'``, most neighbours should be of the same class of the examined
+          sample for it not be excluded.
 
         The strategy `"all"` will be less conservative than `'mode'`. Thus,
-        more samples will be removed when `kind_sel="all"` generally.
+        more samples will be removed when `kind_sel="all"`, generally.
 
     {n_jobs}
 
@@ -222,7 +245,7 @@ class RepeatedEditedNearestNeighbours(BaseCleaningSampler):
     ----------
     sampling_strategy_ : dict
         Dictionary containing the information to sample the dataset. The keys
-        corresponds to the class labels from which to sample and the values
+        correspond to the class labels from which to sample and the values
         are the number of samples to sample.
 
     nn_ : estimator object
@@ -247,13 +270,19 @@ class RepeatedEditedNearestNeighbours(BaseCleaningSampler):
 
         .. versionadded:: 0.9
 
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
+
     See Also
     --------
     CondensedNearestNeighbour : Undersample by condensing samples.
 
     EditedNearestNeighbours : Undersample by editing samples.
 
-    AllKNN : Undersample using ENN and various number of neighbours.
+    AllKNN : Undersample using ENN with varying neighbours.
 
     Notes
     -----
@@ -272,8 +301,7 @@ class RepeatedEditedNearestNeighbours(BaseCleaningSampler):
     --------
     >>> from collections import Counter
     >>> from sklearn.datasets import make_classification
-    >>> from imblearn.under_sampling import \
-RepeatedEditedNearestNeighbours # doctest : +NORMALIZE_WHITESPACE
+    >>> from imblearn.under_sampling import RepeatedEditedNearestNeighbours
     >>> X, y = make_classification(n_classes=2, class_sep=2,
     ... weights=[0.1, 0.9], n_informative=3, n_redundant=1, flip_y=0,
     ... n_features=20, n_clusters_per_class=1, n_samples=1000, random_state=10)
@@ -285,7 +313,17 @@ RepeatedEditedNearestNeighbours # doctest : +NORMALIZE_WHITESPACE
     Resampled dataset shape Counter({{1: 887, 0: 100}})
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseCleaningSampler._parameter_constraints,
+        "n_neighbors": [
+            Interval(numbers.Integral, 1, None, closed="left"),
+            HasMethods(["kneighbors", "kneighbors_graph"]),
+        ],
+        "max_iter": [Interval(numbers.Integral, 1, None, closed="left")],
+        "kind_sel": [StrOptions({"all", "mode"})],
+        "n_jobs": [numbers.Integral, None],
+    }
+
     def __init__(
         self,
         *,
@@ -303,12 +341,6 @@ RepeatedEditedNearestNeighbours # doctest : +NORMALIZE_WHITESPACE
 
     def _validate_estimator(self):
         """Private function to create the NN estimator"""
-        if self.max_iter < 2:
-            raise ValueError(
-                f"max_iter must be greater than 1."
-                f" Got {type(self.max_iter)} instead."
-            )
-
         self.nn_ = check_neighbors_object(
             "n_neighbors", self.n_neighbors, additional_neighbor=1
         )
@@ -329,7 +361,6 @@ RepeatedEditedNearestNeighbours # doctest : +NORMALIZE_WHITESPACE
         class_minority = min(target_stats, key=target_stats.get)
 
         for n_iter in range(self.max_iter):
-
             prev_len = y_.shape[0]
             X_enn, y_enn = self.enn_.fit_resample(X_, y_)
 
@@ -356,7 +387,10 @@ RepeatedEditedNearestNeighbours # doctest : +NORMALIZE_WHITESPACE
             # Case 3
             b_remove_maj_class = len(stats_enn) < len(target_stats)
 
-            X_, y_, = (
+            (
+                X_,
+                y_,
+            ) = (
                 X_enn,
                 y_enn,
             )
@@ -364,7 +398,10 @@ RepeatedEditedNearestNeighbours # doctest : +NORMALIZE_WHITESPACE
 
             if b_conv or b_min_bec_maj or b_remove_maj_class:
                 if b_conv:
-                    X_, y_, = (
+                    (
+                        X_,
+                        y_,
+                    ) = (
                         X_enn,
                         y_enn,
                     )
@@ -381,6 +418,11 @@ RepeatedEditedNearestNeighbours # doctest : +NORMALIZE_WHITESPACE
     def _more_tags(self):
         return {"sample_indices": True}
 
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.sampler_tags.sample_indices = True
+        return tags
+
 
 @Substitution(
     sampling_strategy=BaseCleaningSampler._sampling_strategy_docstring,
@@ -389,8 +431,12 @@ RepeatedEditedNearestNeighbours # doctest : +NORMALIZE_WHITESPACE
 class AllKNN(BaseCleaningSampler):
     """Undersample based on the AllKNN method.
 
-    This method will apply ENN several time and will vary the number of nearest
-    neighbours.
+    This method will apply :class:`EditedNearestNeighbours` several times varying the
+    number of nearest neighbours at each round. It begins by examining 1 closest
+    neighbour, and it incrases the neighbourhood by 1 at each round.
+
+    The algorithm stops when the maximum number of neighbours are examined or
+    when the majority class becomes the minority class, whichever comes first.
 
     Read more in the :ref:`User Guide <edited_nearest_neighbors>`.
 
@@ -399,21 +445,23 @@ class AllKNN(BaseCleaningSampler):
     {sampling_strategy}
 
     n_neighbors : int or estimator object, default=3
-        If ``int``, size of the neighbourhood to consider to compute the
-        nearest neighbors. If object, an estimator that inherits from
-        :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
-        find the nearest-neighbors. By default, it will be a 3-NN.
+        If ``int``, size of the maximum neighbourhood to examine for the undersampling.
+        If `n_neighbors=3`, in the first iteration the algorithm will examine 1 closest
+        neigbhour, in the second round 2, and in the final round 3. If object, an
+        estimator that inherits from :class:`~sklearn.neighbors.base.KNeighborsMixin`
+        that will be used to find the nearest-neighbors. Note that if you want to
+        examine the 3 closest neighbours of a sample, you need to pass a 4-KNN.
 
     kind_sel : {{'all', 'mode'}}, default='all'
-        Strategy to use in order to exclude samples.
+        Strategy to use to exclude samples.
 
-        - If ``'all'``, all neighbours will have to agree with the samples of
-          interest to not be excluded.
-        - If ``'mode'``, the majority vote of the neighbours will be used in
-          order to exclude a sample.
+        - If ``'all'``, all neighbours should be of the same class of the examined
+          sample for it not be excluded.
+        - If ``'mode'``, most neighbours should be of the same class of the examined
+          sample for it not be excluded.
 
         The strategy `"all"` will be less conservative than `'mode'`. Thus,
-        more samples will be removed when `kind_sel="all"` generally.
+        more samples will be removed when `kind_sel="all"`, generally.
 
     allow_minority : bool, default=False
         If ``True``, it allows the majority classes to become the minority
@@ -427,7 +475,7 @@ class AllKNN(BaseCleaningSampler):
     ----------
     sampling_strategy_ : dict
         Dictionary containing the information to sample the dataset. The keys
-        corresponds to the class labels from which to sample and the values
+        correspond to the class labels from which to sample and the values
         are the number of samples to sample.
 
     nn_ : estimator object
@@ -446,6 +494,12 @@ class AllKNN(BaseCleaningSampler):
         Number of features in the input dataset.
 
         .. versionadded:: 0.9
+
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
 
     See Also
     --------
@@ -472,8 +526,7 @@ class AllKNN(BaseCleaningSampler):
     --------
     >>> from collections import Counter
     >>> from sklearn.datasets import make_classification
-    >>> from imblearn.under_sampling import \
-AllKNN # doctest: +NORMALIZE_WHITESPACE
+    >>> from imblearn.under_sampling import AllKNN
     >>> X, y = make_classification(n_classes=2, class_sep=2,
     ... weights=[0.1, 0.9], n_informative=3, n_redundant=1, flip_y=0,
     ... n_features=20, n_clusters_per_class=1, n_samples=1000, random_state=10)
@@ -485,7 +538,17 @@ AllKNN # doctest: +NORMALIZE_WHITESPACE
     Resampled dataset shape Counter({{1: 887, 0: 100}})
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseCleaningSampler._parameter_constraints,
+        "n_neighbors": [
+            Interval(numbers.Integral, 1, None, closed="left"),
+            HasMethods(["kneighbors", "kneighbors_graph"]),
+        ],
+        "kind_sel": [StrOptions({"all", "mode"})],
+        "allow_minority": ["boolean"],
+        "n_jobs": [numbers.Integral, None],
+    }
+
     def __init__(
         self,
         *,
@@ -503,9 +566,6 @@ AllKNN # doctest: +NORMALIZE_WHITESPACE
 
     def _validate_estimator(self):
         """Create objects required by AllKNN"""
-        if self.kind_sel not in SEL_KIND:
-            raise NotImplementedError
-
         self.nn_ = check_neighbors_object(
             "n_neighbors", self.n_neighbors, additional_neighbor=1
         )
@@ -553,7 +613,10 @@ AllKNN # doctest: +NORMALIZE_WHITESPACE
             # Case 2
             b_remove_maj_class = len(stats_enn) < len(target_stats)
 
-            X_, y_, = (
+            (
+                X_,
+                y_,
+            ) = (
                 X_enn,
                 y_enn,
             )
@@ -568,3 +631,8 @@ AllKNN # doctest: +NORMALIZE_WHITESPACE
 
     def _more_tags(self):
         return {"sample_indices": True}
+
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.sampler_tags.sample_indices = True
+        return tags

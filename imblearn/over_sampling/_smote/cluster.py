@@ -6,21 +6,19 @@
 # License: MIT
 
 import math
+import numbers
 
 import numpy as np
 from scipy import sparse
-
 from sklearn.base import clone
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.metrics import pairwise_distances
 from sklearn.utils import _safe_indexing
+from sklearn.utils._param_validation import HasMethods, Interval, StrOptions
 
-from ..base import BaseOverSampler
 from ...utils import Substitution
-from ...utils._docstring import _n_jobs_docstring
-from ...utils._docstring import _random_state_docstring
-from ...utils._validation import _deprecate_positional_args
-
+from ...utils._docstring import _n_jobs_docstring, _random_state_docstring
+from ..base import BaseOverSampler
 from .base import BaseSMOTE
 
 
@@ -45,10 +43,17 @@ class KMeansSMOTE(BaseSMOTE):
     {random_state}
 
     k_neighbors : int or object, default=2
-        If ``int``, number of nearest neighbours to used to construct synthetic
-        samples.  If object, an estimator that inherits from
-        :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
-        find the k_neighbors.
+        The nearest neighbors used to define the neighborhood of samples to use
+        to generate the synthetic samples. You can pass:
+
+        - an `int` corresponding to the number of neighbors to use. A
+          `~sklearn.neighbors.NearestNeighbors` instance will be fitted in this
+          case.
+        - an instance of a compatible nearest neighbors algorithm that should
+          implement both methods `kneighbors` and `kneighbors_graph`. For
+          instance, it could correspond to a
+          :class:`~sklearn.neighbors.NearestNeighbors` but could be extended to
+          any compatible class.
 
     {n_jobs}
 
@@ -88,6 +93,12 @@ class KMeansSMOTE(BaseSMOTE):
 
         .. versionadded:: 0.9
 
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
+
     See Also
     --------
     SMOTE : Over-sample using SMOTE.
@@ -115,13 +126,15 @@ class KMeansSMOTE(BaseSMOTE):
     >>> from imblearn.over_sampling import KMeansSMOTE
     >>> from sklearn.datasets import make_blobs
     >>> blobs = [100, 800, 100]
-    >>> X, y  = make_blobs(blobs, centers=[(-10, 0), (0,0), (10, 0)])
+    >>> X, y  = make_blobs(blobs, centers=[(-10, 0), (0,0), (10, 0)], random_state=0)
     >>> # Add a single 0 sample in the middle blob
     >>> X = np.concatenate([X, [[0, 0]]])
     >>> y = np.append(y, 0)
     >>> # Make this a binary classification problem
     >>> y = y == 1
-    >>> sm = KMeansSMOTE(random_state=42)
+    >>> sm = KMeansSMOTE(
+    ...     kmeans_estimator=MiniBatchKMeans(n_init=1, random_state=0), random_state=42
+    ... )
     >>> X_res, y_res = sm.fit_resample(X, y)
     >>> # Find the number of new samples in the middle blob
     >>> n_res_in_middle = ((X_res[:, 0] > -5) & (X_res[:, 0] < 5)).sum()
@@ -133,7 +146,18 @@ class KMeansSMOTE(BaseSMOTE):
     More 0 samples: True
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseSMOTE._parameter_constraints,
+        "kmeans_estimator": [
+            HasMethods(["fit", "predict"]),
+            Interval(numbers.Integral, 1, None, closed="left"),
+            None,
+        ],
+        "cluster_balance_threshold": [StrOptions({"auto"}), numbers.Real],
+        "density_exponent": [StrOptions({"auto"}), numbers.Real],
+        "n_jobs": [numbers.Integral, None],
+    }
+
     def __init__(
         self,
         *,
@@ -149,11 +173,11 @@ class KMeansSMOTE(BaseSMOTE):
             sampling_strategy=sampling_strategy,
             random_state=random_state,
             k_neighbors=k_neighbors,
-            n_jobs=n_jobs,
         )
         self.kmeans_estimator = kmeans_estimator
         self.cluster_balance_threshold = cluster_balance_threshold
         self.density_exponent = density_exponent
+        self.n_jobs = n_jobs
 
     def _validate_estimator(self):
         super()._validate_estimator()
@@ -166,15 +190,6 @@ class KMeansSMOTE(BaseSMOTE):
             )
         else:
             self.kmeans_estimator_ = clone(self.kmeans_estimator)
-
-        # validate the parameters
-        for param_name in ("cluster_balance_threshold", "density_exponent"):
-            param = getattr(self, param_name)
-            if isinstance(param, str) and param != "auto":
-                raise ValueError(
-                    f"'{param_name}' should be 'auto' when a string is passed."
-                    f" Got {repr(param)} instead."
-                )
 
         self.cluster_balance_threshold_ = (
             self.cluster_balance_threshold
@@ -198,7 +213,7 @@ class KMeansSMOTE(BaseSMOTE):
             if self.density_exponent == "auto"
             else self.density_exponent
         )
-        return (mean_distance ** exponent) / X.shape[0]
+        return (mean_distance**exponent) / X.shape[0]
 
     def _fit_resample(self, X, y):
         self._validate_estimator()
@@ -216,8 +231,12 @@ class KMeansSMOTE(BaseSMOTE):
 
             # identify cluster which are answering the requirements
             for cluster_idx in range(self.kmeans_estimator_.n_clusters):
-
                 cluster_mask = np.flatnonzero(X_clusters == cluster_idx)
+
+                if cluster_mask.size == 0:
+                    # empty cluster
+                    continue
+
                 X_cluster = _safe_indexing(X, cluster_mask)
                 y_cluster = _safe_indexing(y, cluster_mask)
 
@@ -249,10 +268,10 @@ class KMeansSMOTE(BaseSMOTE):
 
             if not valid_clusters:
                 raise RuntimeError(
-                    f"No clusters found with sufficient samples of "
+                    "No clusters found with sufficient samples of "
                     f"class {class_sample}. Try lowering the "
-                    f"cluster_balance_threshold or increasing the number of "
-                    f"clusters."
+                    "cluster_balance_threshold or increasing the number of "
+                    "clusters."
                 )
 
             for valid_cluster_idx, valid_cluster in enumerate(valid_clusters):

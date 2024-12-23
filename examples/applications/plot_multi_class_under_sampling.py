@@ -20,9 +20,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
 from imblearn.datasets import make_imbalance
-from imblearn.under_sampling import NearMiss
-from imblearn.pipeline import make_pipeline
 from imblearn.metrics import classification_report_imbalanced
+from imblearn.pipeline import make_pipeline
+from imblearn.under_sampling import NearMiss
 
 print(__doc__)
 
@@ -43,9 +43,7 @@ print(f"Training target statistics: {Counter(y_train)}")
 print(f"Testing target statistics: {Counter(y_test)}")
 
 # Create a pipeline
-pipeline = make_pipeline(
-    NearMiss(version=2), StandardScaler(), LogisticRegression(random_state=RANDOM_STATE)
-)
+pipeline = make_pipeline(NearMiss(version=2), StandardScaler(), LogisticRegression())
 pipeline.fit(X_train, y_train)
 
 # Classify and report the results

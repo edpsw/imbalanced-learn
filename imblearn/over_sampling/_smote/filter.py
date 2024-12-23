@@ -6,28 +6,23 @@
 #          Dzianis Dudnik
 # License: MIT
 
+import numbers
+
 import numpy as np
 from scipy import sparse
-
 from sklearn.base import clone
 from sklearn.svm import SVC
-from sklearn.utils import check_random_state
-from sklearn.utils import _safe_indexing
+from sklearn.utils import _safe_indexing, check_random_state
+from sklearn.utils._param_validation import HasMethods, Interval, StrOptions
 
-from ..base import BaseOverSampler
-from ...exceptions import raise_isinstance_error
-from ...utils import check_neighbors_object
-from ...utils import Substitution
-from ...utils._docstring import _n_jobs_docstring
+from ...utils import Substitution, check_neighbors_object
 from ...utils._docstring import _random_state_docstring
-from ...utils._validation import _deprecate_positional_args
-
+from ..base import BaseOverSampler
 from .base import BaseSMOTE
 
 
 @Substitution(
     sampling_strategy=BaseOverSampler._sampling_strategy_docstring,
-    n_jobs=_n_jobs_docstring,
     random_state=_random_state_docstring,
 )
 class BorderlineSMOTE(BaseSMOTE):
@@ -48,18 +43,30 @@ class BorderlineSMOTE(BaseSMOTE):
     {random_state}
 
     k_neighbors : int or object, default=5
-        If ``int``, number of nearest neighbours to used to construct synthetic
-        samples.  If object, an estimator that inherits from
-        :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
-        find the k_neighbors.
+        The nearest neighbors used to define the neighborhood of samples to use
+        to generate the synthetic samples. You can pass:
 
-    {n_jobs}
+        - an `int` corresponding to the number of neighbors to use. A
+          `~sklearn.neighbors.NearestNeighbors` instance will be fitted in this
+          case.
+        - an instance of a compatible nearest neighbors algorithm that should
+          implement both methods `kneighbors` and `kneighbors_graph`. For
+          instance, it could correspond to a
+          :class:`~sklearn.neighbors.NearestNeighbors` but could be extended to
+          any compatible class.
 
     m_neighbors : int or object, default=10
-        If int, number of nearest neighbours to use to determine if a minority
-        sample is in danger. If object, an estimator that inherits
-        from :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used
-        to find the m_neighbors.
+        The nearest neighbors used to determine if a minority sample is in
+        "danger". You can pass:
+
+        - an `int` corresponding to the number of neighbors to use. A
+          `~sklearn.neighbors.NearestNeighbors` instance will be fitted in this
+          case.
+        - an instance of a compatible nearest neighbors algorithm that should
+          implement both methods `kneighbors` and `kneighbors_graph`. For
+          instance, it could correspond to a
+          :class:`~sklearn.neighbors.NearestNeighbors` but could be extended to
+          any compatible class.
 
     kind : {{"borderline-1", "borderline-2"}}, default='borderline-1'
         The type of SMOTE algorithm to use one of the following options:
@@ -78,10 +85,21 @@ class BorderlineSMOTE(BaseSMOTE):
     nn_m_ : estimator object
         Validated m-nearest neighbours created from the `m_neighbors` parameter.
 
+    in_danger_indices : dict of ndarray
+        Dictionary containing the indices of the samples considered in danger that
+        are used to generate new synthetic samples. The keys corresponds to the class
+        label.
+
     n_features_in_ : int
         Number of features in the input dataset.
 
         .. versionadded:: 0.9
+
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
 
     See Also
     --------
@@ -117,8 +135,7 @@ class BorderlineSMOTE(BaseSMOTE):
     --------
     >>> from collections import Counter
     >>> from sklearn.datasets import make_classification
-    >>> from imblearn.over_sampling import \
-BorderlineSMOTE # doctest: +NORMALIZE_WHITESPACE
+    >>> from imblearn.over_sampling import BorderlineSMOTE
     >>> X, y = make_classification(n_classes=2, class_sep=2,
     ... weights=[0.1, 0.9], n_informative=3, n_redundant=1, flip_y=0,
     ... n_features=20, n_clusters_per_class=1, n_samples=1000, random_state=10)
@@ -130,14 +147,21 @@ BorderlineSMOTE # doctest: +NORMALIZE_WHITESPACE
     Resampled dataset shape Counter({{0: 900, 1: 900}})
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseSMOTE._parameter_constraints,
+        "m_neighbors": [
+            Interval(numbers.Integral, 1, None, closed="left"),
+            HasMethods(["kneighbors", "kneighbors_graph"]),
+        ],
+        "kind": [StrOptions({"borderline-1", "borderline-2"})],
+    }
+
     def __init__(
         self,
         *,
         sampling_strategy="auto",
         random_state=None,
         k_neighbors=5,
-        n_jobs=None,
         m_neighbors=10,
         kind="borderline-1",
     ):
@@ -145,7 +169,6 @@ BorderlineSMOTE # doctest: +NORMALIZE_WHITESPACE
             sampling_strategy=sampling_strategy,
             random_state=random_state,
             k_neighbors=k_neighbors,
-            n_jobs=n_jobs,
         )
         self.m_neighbors = m_neighbors
         self.kind = kind
@@ -155,13 +178,6 @@ BorderlineSMOTE # doctest: +NORMALIZE_WHITESPACE
         self.nn_m_ = check_neighbors_object(
             "m_neighbors", self.m_neighbors, additional_neighbor=1
         )
-        self.nn_m_.set_params(**{"n_jobs": self.n_jobs})
-        if self.kind not in ("borderline-1", "borderline-2"):
-            raise ValueError(
-                f'The possible "kind" of algorithm are '
-                f'"borderline-1" and "borderline-2".'
-                f"Got {self.kind} instead."
-            )
 
     def _fit_resample(self, X, y):
         self._validate_estimator()
@@ -169,6 +185,7 @@ BorderlineSMOTE # doctest: +NORMALIZE_WHITESPACE
         X_resampled = X.copy()
         y_resampled = y.copy()
 
+        self.in_danger_indices = {}
         for class_sample, n_samples in self.sampling_strategy_.items():
             if n_samples == 0:
                 continue
@@ -176,74 +193,43 @@ BorderlineSMOTE # doctest: +NORMALIZE_WHITESPACE
             X_class = _safe_indexing(X, target_class_indices)
 
             self.nn_m_.fit(X)
-            danger_index = self._in_danger_noise(
+            mask_danger = self._in_danger_noise(
                 self.nn_m_, X_class, class_sample, y, kind="danger"
             )
-            if not any(danger_index):
+            if not any(mask_danger):
                 continue
+            X_danger = _safe_indexing(X_class, mask_danger)
+            self.in_danger_indices[class_sample] = target_class_indices[mask_danger]
 
-            self.nn_k_.fit(X_class)
-            nns = self.nn_k_.kneighbors(
-                _safe_indexing(X_class, danger_index), return_distance=False
-            )[:, 1:]
-
-            # divergence between borderline-1 and borderline-2
             if self.kind == "borderline-1":
-                # Create synthetic samples for borderline points.
-                X_new, y_new = self._make_samples(
-                    _safe_indexing(X_class, danger_index),
-                    y.dtype,
-                    class_sample,
-                    X_class,
-                    nns,
-                    n_samples,
-                )
-                if sparse.issparse(X_new):
-                    X_resampled = sparse.vstack([X_resampled, X_new])
-                else:
-                    X_resampled = np.vstack((X_resampled, X_new))
-                y_resampled = np.hstack((y_resampled, y_new))
+                X_to_sample_from = X_class  # consider the positive class only
+                y_to_check_neighbors = None
+            else:  # self.kind == "borderline-2"
+                X_to_sample_from = X  # consider the whole dataset
+                y_to_check_neighbors = y
 
-            elif self.kind == "borderline-2":
-                random_state = check_random_state(self.random_state)
-                fractions = random_state.beta(10, 10)
-
-                # only minority
-                X_new_1, y_new_1 = self._make_samples(
-                    _safe_indexing(X_class, danger_index),
-                    y.dtype,
-                    class_sample,
-                    X_class,
-                    nns,
-                    int(fractions * (n_samples + 1)),
-                    step_size=1.0,
-                )
-
-                # we use a one-vs-rest policy to handle the multiclass in which
-                # new samples will be created considering not only the majority
-                # class but all over classes.
-                X_new_2, y_new_2 = self._make_samples(
-                    _safe_indexing(X_class, danger_index),
-                    y.dtype,
-                    class_sample,
-                    _safe_indexing(X, np.flatnonzero(y != class_sample)),
-                    nns,
-                    int((1 - fractions) * n_samples),
-                    step_size=0.5,
-                )
-
-                if sparse.issparse(X_resampled):
-                    X_resampled = sparse.vstack([X_resampled, X_new_1, X_new_2])
-                else:
-                    X_resampled = np.vstack((X_resampled, X_new_1, X_new_2))
-                y_resampled = np.hstack((y_resampled, y_new_1, y_new_2))
+            self.nn_k_.fit(X_to_sample_from)
+            nns = self.nn_k_.kneighbors(X_danger, return_distance=False)[:, 1:]
+            X_new, y_new = self._make_samples(
+                X_danger,
+                y.dtype,
+                class_sample,
+                X_to_sample_from,
+                nns,
+                n_samples,
+                y=y_to_check_neighbors,
+            )
+            if sparse.issparse(X_new):
+                X_resampled = sparse.vstack([X_resampled, X_new])
+            else:
+                X_resampled = np.vstack((X_resampled, X_new))
+            y_resampled = np.hstack((y_resampled, y_new))
 
         return X_resampled, y_resampled
 
 
 @Substitution(
     sampling_strategy=BaseOverSampler._sampling_strategy_docstring,
-    n_jobs=_n_jobs_docstring,
     random_state=_random_state_docstring,
 )
 class SVMSMOTE(BaseSMOTE):
@@ -263,21 +249,35 @@ class SVMSMOTE(BaseSMOTE):
     {random_state}
 
     k_neighbors : int or object, default=5
-        If ``int``, number of nearest neighbours to used to construct synthetic
-        samples.  If object, an estimator that inherits from
-        :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
-        find the k_neighbors.
+        The nearest neighbors used to define the neighborhood of samples to use
+        to generate the synthetic samples. You can pass:
 
-    {n_jobs}
+        - an `int` corresponding to the number of neighbors to use. A
+          `~sklearn.neighbors.NearestNeighbors` instance will be fitted in this
+          case.
+        - an instance of a compatible nearest neighbors algorithm that should
+          implement both methods `kneighbors` and `kneighbors_graph`. For
+          instance, it could correspond to a
+          :class:`~sklearn.neighbors.NearestNeighbors` but could be extended to
+          any compatible class.
 
     m_neighbors : int or object, default=10
-        If int, number of nearest neighbours to use to determine if a minority
-        sample is in danger. If object, an estimator that inherits from
-        :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
-        find the m_neighbors.
+        The nearest neighbors used to determine if a minority sample is in
+        "danger". You can pass:
+
+        - an `int` corresponding to the number of neighbors to use. A
+          `~sklearn.neighbors.NearestNeighbors` instance will be fitted in this
+          case.
+        - an instance of a compatible nearest neighbors algorithm that should
+          implement both methods `kneighbors` and `kneighbors_graph`. For
+          instance, it could correspond to a
+          :class:`~sklearn.neighbors.NearestNeighbors` but could be extended to
+          any compatible class.
 
     svm_estimator : estimator object, default=SVC()
         A parametrized :class:`~sklearn.svm.SVC` classifier can be passed.
+        A scikit-learn compatible estimator can be passed but it is required
+        to expose a `support_` fitted attribute.
 
     out_step : float, default=0.5
         Step size when extrapolating.
@@ -303,6 +303,12 @@ class SVMSMOTE(BaseSMOTE):
         Number of features in the input dataset.
 
         .. versionadded:: 0.9
+
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
 
     See Also
     --------
@@ -341,8 +347,7 @@ class SVMSMOTE(BaseSMOTE):
     --------
     >>> from collections import Counter
     >>> from sklearn.datasets import make_classification
-    >>> from imblearn.over_sampling import \
-SVMSMOTE # doctest: +NORMALIZE_WHITESPACE
+    >>> from imblearn.over_sampling import SVMSMOTE
     >>> X, y = make_classification(n_classes=2, class_sep=2,
     ... weights=[0.1, 0.9], n_informative=3, n_redundant=1, flip_y=0,
     ... n_features=20, n_clusters_per_class=1, n_samples=1000, random_state=10)
@@ -354,14 +359,22 @@ SVMSMOTE # doctest: +NORMALIZE_WHITESPACE
     Resampled dataset shape Counter({{0: 900, 1: 900}})
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseSMOTE._parameter_constraints,
+        "m_neighbors": [
+            Interval(numbers.Integral, 1, None, closed="left"),
+            HasMethods(["kneighbors", "kneighbors_graph"]),
+        ],
+        "svm_estimator": [HasMethods(["fit", "predict"]), None],
+        "out_step": [Interval(numbers.Real, 0, 1, closed="both")],
+    }
+
     def __init__(
         self,
         *,
         sampling_strategy="auto",
         random_state=None,
         k_neighbors=5,
-        n_jobs=None,
         m_neighbors=10,
         svm_estimator=None,
         out_step=0.5,
@@ -370,7 +383,6 @@ SVMSMOTE # doctest: +NORMALIZE_WHITESPACE
             sampling_strategy=sampling_strategy,
             random_state=random_state,
             k_neighbors=k_neighbors,
-            n_jobs=n_jobs,
         )
         self.m_neighbors = m_neighbors
         self.svm_estimator = svm_estimator
@@ -381,14 +393,11 @@ SVMSMOTE # doctest: +NORMALIZE_WHITESPACE
         self.nn_m_ = check_neighbors_object(
             "m_neighbors", self.m_neighbors, additional_neighbor=1
         )
-        self.nn_m_.set_params(**{"n_jobs": self.n_jobs})
 
         if self.svm_estimator is None:
             self.svm_estimator_ = SVC(gamma="scale", random_state=self.random_state)
-        elif isinstance(self.svm_estimator, SVC):
-            self.svm_estimator_ = clone(self.svm_estimator)
         else:
-            raise_isinstance_error("svm_estimator", [SVC], self.svm_estimator)
+            self.svm_estimator_ = clone(self.svm_estimator)
 
     def _fit_resample(self, X, y):
         self._validate_estimator()
@@ -403,6 +412,12 @@ SVMSMOTE # doctest: +NORMALIZE_WHITESPACE
             X_class = _safe_indexing(X, target_class_indices)
 
             self.svm_estimator_.fit(X, y)
+            if not hasattr(self.svm_estimator_, "support_"):
+                raise RuntimeError(
+                    "`svm_estimator` is required to exposed a `support_` fitted "
+                    "attribute. Such estimator belongs to the familly of Support "
+                    "Vector Machine."
+                )
             support_index = self.svm_estimator_.support_[
                 y[self.svm_estimator_.support_] == class_sample
             ]
@@ -415,6 +430,11 @@ SVMSMOTE # doctest: +NORMALIZE_WHITESPACE
             support_vector = _safe_indexing(
                 support_vector, np.flatnonzero(np.logical_not(noise_bool))
             )
+            if support_vector.shape[0] == 0:
+                raise ValueError(
+                    "All support vectors are considered as noise. SVM-SMOTE is not "
+                    "adapted to your dataset. Try another SMOTE variant."
+                )
             danger_bool = self._in_danger_noise(
                 self.nn_m_, support_vector, class_sample, y, kind="danger"
             )

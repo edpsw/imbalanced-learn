@@ -3,21 +3,18 @@
 #          Christos Aridas
 # License: MIT
 
-import pytest
 import numpy as np
-
+import pytest
 from sklearn.datasets import load_iris, make_hastie_10_2
-from sklearn.ensemble import AdaBoostClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import AdaBoostClassifier, GradientBoostingClassifier
 from sklearn.feature_selection import SelectKBest
-from sklearn.utils._testing import assert_allclose
-from sklearn.utils._testing import assert_array_equal
+from sklearn.model_selection import GridSearchCV, train_test_split
+from sklearn.utils._testing import assert_allclose, assert_array_equal
 
-from imblearn.ensemble import EasyEnsembleClassifier
 from imblearn.datasets import make_imbalance
-from imblearn.under_sampling import RandomUnderSampler
+from imblearn.ensemble import EasyEnsembleClassifier
 from imblearn.pipeline import make_pipeline
+from imblearn.under_sampling import RandomUnderSampler
 
 iris = load_iris()
 
@@ -42,10 +39,13 @@ Y = np.array([1, 2, 2, 2, 1, 0, 1, 1, 1, 0])
 
 @pytest.mark.parametrize("n_estimators", [10, 20])
 @pytest.mark.parametrize(
-    "base_estimator",
-    [AdaBoostClassifier(n_estimators=5), AdaBoostClassifier(n_estimators=10)],
+    "estimator",
+    [
+        GradientBoostingClassifier(n_estimators=5),
+        GradientBoostingClassifier(n_estimators=10),
+    ],
 )
-def test_easy_ensemble_classifier(n_estimators, base_estimator):
+def test_easy_ensemble_classifier(n_estimators, estimator):
     # Check classification for various parameter settings.
     X, y = make_imbalance(
         iris.data,
@@ -57,14 +57,14 @@ def test_easy_ensemble_classifier(n_estimators, base_estimator):
 
     eec = EasyEnsembleClassifier(
         n_estimators=n_estimators,
-        base_estimator=base_estimator,
+        estimator=estimator,
         n_jobs=-1,
         random_state=RND_SEED,
     )
     eec.fit(X_train, y_train).score(X_test, y_test)
     assert len(eec.estimators_) == n_estimators
     for est in eec.estimators_:
-        assert len(est.named_steps["classifier"]) == base_estimator.n_estimators
+        assert len(est.named_steps["classifier"]) == estimator.n_estimators
     # test the different prediction function
     eec.predict(X_test)
     eec.predict_proba(X_test)
@@ -72,8 +72,8 @@ def test_easy_ensemble_classifier(n_estimators, base_estimator):
     eec.decision_function(X_test)
 
 
-def test_base_estimator():
-    # Check base_estimator and its default values.
+def test_estimator():
+    # Check estimator and its default values.
     X, y = make_imbalance(
         iris.data,
         iris.target,
@@ -86,13 +86,13 @@ def test_base_estimator():
         X_train, y_train
     )
 
-    assert isinstance(ensemble.base_estimator_.steps[-1][1], AdaBoostClassifier)
+    assert isinstance(ensemble.estimator_.steps[-1][1], AdaBoostClassifier)
 
     ensemble = EasyEnsembleClassifier(
-        2, AdaBoostClassifier(), n_jobs=-1, random_state=0
+        2, GradientBoostingClassifier(), n_jobs=-1, random_state=0
     ).fit(X_train, y_train)
 
-    assert isinstance(ensemble.base_estimator_.steps[-1][1], AdaBoostClassifier)
+    assert isinstance(ensemble.estimator_.steps[-1][1], GradientBoostingClassifier)
 
 
 def test_bagging_with_pipeline():
@@ -104,7 +104,7 @@ def test_bagging_with_pipeline():
     )
     estimator = EasyEnsembleClassifier(
         n_estimators=2,
-        base_estimator=make_pipeline(SelectKBest(k=1), AdaBoostClassifier()),
+        estimator=make_pipeline(SelectKBest(k=1), GradientBoostingClassifier()),
     )
     estimator.fit(X, y).predict(X)
 
@@ -184,25 +184,6 @@ def test_warm_start_equivalence():
     assert_allclose(y1, y2)
 
 
-@pytest.mark.parametrize(
-    "n_estimators, msg_error",
-    [
-        (1.0, "n_estimators must be an integer"),
-        (-10, "n_estimators must be greater than zero"),
-    ],
-)
-def test_easy_ensemble_classifier_error(n_estimators, msg_error):
-    X, y = make_imbalance(
-        iris.data,
-        iris.target,
-        sampling_strategy={0: 20, 1: 25, 2: 50},
-        random_state=0,
-    )
-    with pytest.raises(ValueError, match=msg_error):
-        eec = EasyEnsembleClassifier(n_estimators=n_estimators)
-        eec.fit(X, y)
-
-
 def test_easy_ensemble_classifier_single_estimator():
     X, y = make_imbalance(
         iris.data,
@@ -214,7 +195,8 @@ def test_easy_ensemble_classifier_single_estimator():
 
     clf1 = EasyEnsembleClassifier(n_estimators=1, random_state=0).fit(X_train, y_train)
     clf2 = make_pipeline(
-        RandomUnderSampler(random_state=0), AdaBoostClassifier(random_state=0)
+        RandomUnderSampler(random_state=0),
+        GradientBoostingClassifier(random_state=0),
     ).fit(X_train, y_train)
 
     assert_array_equal(clf1.predict(X_test), clf2.predict(X_test))
@@ -230,10 +212,10 @@ def test_easy_ensemble_classifier_grid_search():
 
     parameters = {
         "n_estimators": [1, 2],
-        "base_estimator__n_estimators": [3, 4],
+        "estimator__n_estimators": [3, 4],
     }
     grid_search = GridSearchCV(
-        EasyEnsembleClassifier(base_estimator=AdaBoostClassifier()),
+        EasyEnsembleClassifier(estimator=GradientBoostingClassifier()),
         parameters,
         cv=5,
     )

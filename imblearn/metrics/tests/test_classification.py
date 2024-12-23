@@ -7,31 +7,34 @@
 from functools import partial
 
 import numpy as np
-
 import pytest
-
-from sklearn import datasets
-from sklearn import svm
-
+from sklearn import datasets, svm
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    brier_score_loss,
+    cohen_kappa_score,
+    jaccard_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 from sklearn.preprocessing import label_binarize
+from sklearn.utils._testing import (
+    assert_allclose,
+    assert_array_equal,
+)
 from sklearn.utils.validation import check_random_state
-from sklearn.utils._testing import assert_allclose
-from sklearn.utils._testing import assert_array_equal
-from sklearn.utils._testing import assert_no_warnings
-from sklearn.metrics import accuracy_score, average_precision_score
-from sklearn.metrics import brier_score_loss, cohen_kappa_score
-from sklearn.metrics import jaccard_score, precision_score
-from sklearn.metrics import recall_score, roc_auc_score
 
-from imblearn.metrics import sensitivity_specificity_support
-from imblearn.metrics import sensitivity_score
-from imblearn.metrics import specificity_score
-from imblearn.metrics import geometric_mean_score
-from imblearn.metrics import make_index_balanced_accuracy
-from imblearn.metrics import classification_report_imbalanced
-from imblearn.metrics import macro_averaged_mean_absolute_error
-
-from imblearn.utils.testing import warns
+from imblearn.metrics import (
+    classification_report_imbalanced,
+    geometric_mean_score,
+    macro_averaged_mean_absolute_error,
+    make_index_balanced_accuracy,
+    sensitivity_score,
+    sensitivity_specificity_support,
+    specificity_score,
+)
 
 RND_SEED = 42
 R_TOL = 1e-2
@@ -101,10 +104,10 @@ def test_sensitivity_specificity_score_binary():
     # binary class case the score is the value of the measure for the positive
     # class (e.g. label == 1). This is deprecated for average != 'binary'.
     for kwargs in ({}, {"average": "binary"}):
-        sen = assert_no_warnings(sensitivity_score, y_true, y_pred, **kwargs)
+        sen = sensitivity_score(y_true, y_pred, **kwargs)
         assert sen == pytest.approx(0.68, rel=R_TOL)
 
-        spe = assert_no_warnings(specificity_score, y_true, y_pred, **kwargs)
+        spe = specificity_score(y_true, y_pred, **kwargs)
         assert spe == pytest.approx(0.88, rel=R_TOL)
 
 
@@ -182,7 +185,8 @@ def test_sensitivity_specificity_support_errors():
 
 def test_sensitivity_specificity_unused_pos_label():
     # but average != 'binary'; even if data is binary
-    with warns(UserWarning, r"use labels=\[pos_label\] to specify a single"):
+    msg = r"use labels=\[pos_label\] to specify a single"
+    with pytest.warns(UserWarning, match=msg):
         sensitivity_specificity_support(
             [1, 2, 1], [1, 2, 2], pos_label=2, average="macro"
         )
@@ -210,7 +214,7 @@ def test_geometric_mean_support_binary():
             [0, 1, 2, 0, 1, 2],
             [0, 2, 1, 0, 0, 1],
             0.001,
-            (0.001 ** 2) ** (1 / 3),
+            (0.001**2) ** (1 / 3),
         ),
         ([0, 1, 2, 3, 4, 5], [0, 1, 2, 3, 4, 5], 0.001, 1),
         ([0, 1, 1, 1, 1, 0], [0, 0, 1, 1, 1, 1], 0.001, (0.5 * 0.75) ** 0.5),
@@ -454,7 +458,7 @@ def test_iba_error_y_score_prob_error(score_loss):
         aps(y_true, y_pred)
 
 
-def test_classification_report_imbalanced_dict():
+def test_classification_report_imbalanced_dict_with_target_names():
     iris = datasets.load_iris()
     y_true, y_pred, _ = make_prediction(dataset=iris, binary=False)
 
@@ -466,12 +470,44 @@ def test_classification_report_imbalanced_dict():
         output_dict=True,
     )
     outer_keys = set(report.keys())
-    inner_keys = set(report[0].keys())
+    inner_keys = set(report["setosa"].keys())
 
     expected_outer_keys = {
-        0,
-        1,
-        2,
+        "setosa",
+        "versicolor",
+        "virginica",
+        "avg_pre",
+        "avg_rec",
+        "avg_spe",
+        "avg_f1",
+        "avg_geo",
+        "avg_iba",
+        "total_support",
+    }
+    expected_inner_keys = {"spe", "f1", "sup", "rec", "geo", "iba", "pre"}
+
+    assert outer_keys == expected_outer_keys
+    assert inner_keys == expected_inner_keys
+
+
+def test_classification_report_imbalanced_dict_without_target_names():
+    iris = datasets.load_iris()
+    y_true, y_pred, _ = make_prediction(dataset=iris, binary=False)
+    print(iris.target_names)
+    report = classification_report_imbalanced(
+        y_true,
+        y_pred,
+        labels=np.arange(len(iris.target_names)),
+        output_dict=True,
+    )
+    print(report.keys())
+    outer_keys = set(report.keys())
+    inner_keys = set(report["0"].keys())
+
+    expected_outer_keys = {
+        "0",
+        "1",
+        "2",
         "avg_pre",
         "avg_rec",
         "avg_spe",

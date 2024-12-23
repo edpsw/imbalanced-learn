@@ -4,23 +4,20 @@
 #          Christos Aridas
 # License: MIT
 
+import numbers
+
 import numpy as np
 from scipy import sparse
+from sklearn.utils import _safe_indexing, check_random_state
+from sklearn.utils._param_validation import HasMethods, Interval
 
-from sklearn.utils import check_random_state
-from sklearn.utils import _safe_indexing
-
-from .base import BaseOverSampler
-from ..utils import check_neighbors_object
-from ..utils import Substitution
-from ..utils._docstring import _n_jobs_docstring
+from ..utils import Substitution, check_neighbors_object
 from ..utils._docstring import _random_state_docstring
-from ..utils._validation import _deprecate_positional_args
+from .base import BaseOverSampler
 
 
 @Substitution(
     sampling_strategy=BaseOverSampler._sampling_strategy_docstring,
-    n_jobs=_n_jobs_docstring,
     random_state=_random_state_docstring,
 )
 class ADASYN(BaseOverSampler):
@@ -39,12 +36,17 @@ class ADASYN(BaseOverSampler):
     {random_state}
 
     n_neighbors : int or estimator object, default=5
-        If ``int``, number of nearest neighbours to used to construct synthetic
-        samples.  If object, an estimator that inherits from
-        :class:`~sklearn.neighbors.base.KNeighborsMixin` that will be used to
-        find the k_neighbors.
+        The nearest neighbors used to define the neighborhood of samples to use
+        to generate the synthetic samples. You can pass:
 
-    {n_jobs}
+        - an `int` corresponding to the number of neighbors to use. A
+          `~sklearn.neighbors.NearestNeighbors` instance will be fitted in this
+          case.
+        - an instance of a compatible nearest neighbors algorithm that should
+          implement both methods `kneighbors` and `kneighbors_graph`. For
+          instance, it could correspond to a
+          :class:`~sklearn.neighbors.NearestNeighbors` but could be extended to
+          any compatible class.
 
     Attributes
     ----------
@@ -60,6 +62,12 @@ class ADASYN(BaseOverSampler):
         Number of features in the input dataset.
 
         .. versionadded:: 0.9
+
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
 
     See Also
     --------
@@ -91,8 +99,7 @@ class ADASYN(BaseOverSampler):
     --------
     >>> from collections import Counter
     >>> from sklearn.datasets import make_classification
-    >>> from imblearn.over_sampling import \
-ADASYN # doctest: +NORMALIZE_WHITESPACE
+    >>> from imblearn.over_sampling import ADASYN
     >>> X, y = make_classification(n_classes=2, class_sep=2,
     ... weights=[0.1, 0.9], n_informative=3, n_redundant=1, flip_y=0,
     ... n_features=20, n_clusters_per_class=1, n_samples=1000,
@@ -105,26 +112,30 @@ ADASYN # doctest: +NORMALIZE_WHITESPACE
     Resampled dataset shape Counter({{0: 904, 1: 900}})
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseOverSampler._parameter_constraints,
+        "n_neighbors": [
+            Interval(numbers.Integral, 1, None, closed="left"),
+            HasMethods(["kneighbors", "kneighbors_graph"]),
+        ],
+    }
+
     def __init__(
         self,
         *,
         sampling_strategy="auto",
         random_state=None,
         n_neighbors=5,
-        n_jobs=None,
     ):
         super().__init__(sampling_strategy=sampling_strategy)
         self.random_state = random_state
         self.n_neighbors = n_neighbors
-        self.n_jobs = n_jobs
 
     def _validate_estimator(self):
         """Create the necessary objects for ADASYN"""
         self.nn_ = check_neighbors_object(
             "n_neighbors", self.n_neighbors, additional_neighbor=1
         )
-        self.nn_.set_params(**{"n_jobs": self.n_jobs})
 
     def _fit_resample(self, X, y):
         self._validate_estimator()
@@ -198,3 +209,7 @@ ADASYN # doctest: +NORMALIZE_WHITESPACE
         return {
             "X_types": ["2darray"],
         }
+
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        return tags

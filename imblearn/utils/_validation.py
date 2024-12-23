@@ -6,18 +6,18 @@
 import warnings
 from collections import OrderedDict
 from functools import wraps
-from inspect import signature, Parameter
+from inspect import Parameter, signature
 from numbers import Integral, Real
 
 import numpy as np
-
+from scipy.sparse import issparse
 from sklearn.base import clone
-from sklearn.neighbors._base import KNeighborsMixin
 from sklearn.neighbors import NearestNeighbors
 from sklearn.utils import column_or_1d
 from sklearn.utils.multiclass import type_of_target
+from sklearn.utils.validation import _num_samples
 
-from ..exceptions import raise_isinstance_error
+from ..utils._sklearn_compat import _is_pandas_df, check_array
 
 SAMPLING_KIND = (
     "over-sampling",
@@ -39,6 +39,12 @@ class ArraysTransformer:
     def transform(self, X, y):
         X = self._transfrom_one(X, self.x_props)
         y = self._transfrom_one(y, self.y_props)
+        if self.x_props["type"].lower() == "dataframe" and self.y_props[
+            "type"
+        ].lower() in {"series", "dataframe"}:
+            # We lost the y.index during resampling. We can safely use X.index to align
+            # them.
+            y.index = X.index
         return X, y
 
     def _gets_props(self, array):
@@ -56,8 +62,28 @@ class ArraysTransformer:
         elif type_ == "dataframe":
             import pandas as pd
 
-            ret = pd.DataFrame(array, columns=props["columns"])
-            ret = ret.astype(props["dtypes"])
+            if issparse(array):
+                ret = pd.DataFrame.sparse.from_spmatrix(array, columns=props["columns"])
+            else:
+                ret = pd.DataFrame(array, columns=props["columns"])
+
+            try:
+                ret = ret.astype(props["dtypes"])
+            except TypeError:
+                # We special case the following error:
+                # https://github.com/scikit-learn-contrib/imbalanced-learn/issues/1055
+                # There is no easy way to have a generic workaround. Here, we detect
+                # that we have a column with only null values that is datetime64
+                # (resulting from the np.vstack of the resampling).
+                for col in ret.columns:
+                    if (
+                        ret[col].isnull().all()
+                        and ret[col].dtype == "datetime64[ns]"
+                        and props["dtypes"][col] == "timedelta64[ns]"
+                    ):
+                        ret[col] = pd.to_timedelta(["NaT"] * len(ret[col]))
+                # try again
+                ret = ret.astype(props["dtypes"])
         elif type_ == "series":
             import pandas as pd
 
@@ -67,20 +93,40 @@ class ArraysTransformer:
         return ret
 
 
-def check_neighbors_object(nn_name, nn_object, additional_neighbor=0):
-    """Check the objects is consistent to be a NN.
+def _is_neighbors_object(estimator):
+    """Check that the estimator exposes a KNeighborsMixin-like API.
 
-    Several methods in imblearn relies on NN. Until version 0.4, these
-    objects can be passed at initialisation as an integer or a
-    KNeighborsMixin. After only KNeighborsMixin will be accepted. This
-    utility allows for type checking and raise if the type is wrong.
+    A KNeighborsMixin-like API exposes the following methods: (i) `kneighbors`,
+    (ii) `kneighbors_graph`.
+
+    Parameters
+    ----------
+    estimator : object
+        A scikit-learn compatible estimator.
+
+    Returns
+    -------
+    is_neighbors_object : bool
+        True if the estimator exposes a KNeighborsMixin-like API.
+    """
+    neighbors_attributes = ["kneighbors", "kneighbors_graph"]
+    return all(hasattr(estimator, attr) for attr in neighbors_attributes)
+
+
+def check_neighbors_object(nn_name, nn_object, additional_neighbor=0):
+    """Check the objects is consistent to be a k nearest neighbors.
+
+    Several methods in `imblearn` relies on k nearest neighbors. These objects
+    can be passed at initialisation as an integer or as an object that has
+    KNeighborsMixin-like attributes. This utility will create or clone said
+    object, ensuring it is KNeighbors-like.
 
     Parameters
     ----------
     nn_name : str
         The name associated to the object to raise an error if needed.
 
-    nn_object : int or KNeighborsMixin,
+    nn_object : int or KNeighborsMixin
         The object to be checked.
 
     additional_neighbor : int, default=0
@@ -93,10 +139,8 @@ def check_neighbors_object(nn_name, nn_object, additional_neighbor=0):
     """
     if isinstance(nn_object, Integral):
         return NearestNeighbors(n_neighbors=nn_object + additional_neighbor)
-    elif isinstance(nn_object, KNeighborsMixin):
-        return clone(nn_object)
-    else:
-        raise_isinstance_error(nn_name, [int, KNeighborsMixin], nn_object)
+    # _is_neighbors_object(nn_object)
+    return clone(nn_object)
 
 
 def _count_class_sample(y):
@@ -274,42 +318,35 @@ def _sampling_strategy_dict(sampling_strategy, y, sampling_type):
     if len(set_diff_sampling_strategy_target) > 0:
         raise ValueError(
             f"The {set_diff_sampling_strategy_target} target class is/are not "
-            f"present in the data."
+            "present in the data."
         )
     # check that there is no negative number
     if any(n_samples < 0 for n_samples in sampling_strategy.values()):
         raise ValueError(
-            f"The number of samples in a class cannot be negative."
+            "The number of samples in a class cannot be negative."
             f"'sampling_strategy' contains some negative value: {sampling_strategy}"
         )
     sampling_strategy_ = {}
     if sampling_type == "over-sampling":
-        n_samples_majority = max(target_stats.values())
-        class_majority = max(target_stats, key=target_stats.get)
+        max(target_stats.values())
+        max(target_stats, key=target_stats.get)
         for class_sample, n_samples in sampling_strategy.items():
             if n_samples < target_stats[class_sample]:
                 raise ValueError(
-                    f"With over-sampling methods, the number"
-                    f" of samples in a class should be greater"
-                    f" or equal to the original number of samples."
+                    "With over-sampling methods, the number"
+                    " of samples in a class should be greater"
+                    " or equal to the original number of samples."
                     f" Originally, there is {target_stats[class_sample]} "
                     f"samples and {n_samples} samples are asked."
-                )
-            if n_samples > n_samples_majority:
-                warnings.warn(
-                    f"After over-sampling, the number of samples ({n_samples})"
-                    f" in class {class_sample} will be larger than the number of"
-                    f" samples in the majority class (class #{class_majority} ->"
-                    f" {n_samples_majority})"
                 )
             sampling_strategy_[class_sample] = n_samples - target_stats[class_sample]
     elif sampling_type == "under-sampling":
         for class_sample, n_samples in sampling_strategy.items():
             if n_samples > target_stats[class_sample]:
                 raise ValueError(
-                    f"With under-sampling methods, the number of"
-                    f" samples in a class should be less or equal"
-                    f" to the original number of samples."
+                    "With under-sampling methods, the number of"
+                    " samples in a class should be less or equal"
+                    " to the original number of samples."
                     f" Originally, there is {target_stats[class_sample]} "
                     f"samples and {n_samples} samples are asked."
                 )
@@ -343,7 +380,7 @@ def _sampling_strategy_list(sampling_strategy, y, sampling_type):
     if len(set_diff_sampling_strategy_target) > 0:
         raise ValueError(
             f"The {set_diff_sampling_strategy_target} target class is/are not "
-            f"present in the data."
+            "present in the data."
         )
 
     return {
@@ -498,7 +535,7 @@ def check_sampling_strategy(sampling_strategy, y, sampling_type, **kwargs):
 
     if np.unique(y).size <= 1:
         raise ValueError(
-            f"The target 'y' needs to have more than 1 class. "
+            "The target 'y' needs to have more than 1 class. "
             f"Got {np.unique(y).size} class instead"
         )
 
@@ -508,9 +545,9 @@ def check_sampling_strategy(sampling_strategy, y, sampling_type, **kwargs):
     if isinstance(sampling_strategy, str):
         if sampling_strategy not in SAMPLING_TARGET_KIND.keys():
             raise ValueError(
-                f"When 'sampling_strategy' is a string, it needs"
+                "When 'sampling_strategy' is a string, it needs"
                 f" to be one of {SAMPLING_TARGET_KIND}. Got '{sampling_strategy}' "
-                f"instead."
+                "instead."
             )
         return OrderedDict(
             sorted(SAMPLING_TARGET_KIND[sampling_strategy](y, sampling_type).items())
@@ -526,7 +563,7 @@ def check_sampling_strategy(sampling_strategy, y, sampling_type, **kwargs):
     elif isinstance(sampling_strategy, Real):
         if sampling_strategy <= 0 or sampling_strategy > 1:
             raise ValueError(
-                f"When 'sampling_strategy' is a float, it should be "
+                "When 'sampling_strategy' is a float, it should be "
                 f"in the range (0, 1]. Got {sampling_strategy} instead."
             )
         return OrderedDict(
@@ -584,12 +621,28 @@ def _deprecate_positional_args(f):
                 for name, arg in zip(kwonly_args[:extra_args], args[-extra_args:])
             ]
             warnings.warn(
-                f"Pass {', '.join(args_msg)} as keyword args. From version 0.9 "
-                f"passing these as positional arguments will "
-                f"result in an error",
+                (
+                    f"Pass {', '.join(args_msg)} as keyword args. From version 0.9 "
+                    "passing these as positional arguments will "
+                    "result in an error"
+                ),
                 FutureWarning,
             )
         kwargs.update({k: arg for k, arg in zip(sig.parameters, args)})
         return f(**kwargs)
 
     return inner_f
+
+
+def _check_X(X):
+    """Check X and do not check it if a dataframe."""
+    n_samples = _num_samples(X)
+    if n_samples < 1:
+        raise ValueError(
+            f"Found array with {n_samples} sample(s) while a minimum of 1 is required."
+        )
+    if _is_pandas_df(X):
+        return X
+    return check_array(
+        X, dtype=None, accept_sparse=["csr", "csc"], ensure_all_finite=False
+    )

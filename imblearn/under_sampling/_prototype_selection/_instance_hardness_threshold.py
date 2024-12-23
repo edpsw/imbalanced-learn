@@ -6,23 +6,20 @@ threshold."""
 #          Christos Aridas
 # License: MIT
 
+import numbers
 from collections import Counter
 
 import numpy as np
-
-from sklearn.base import ClassifierMixin, clone
+from sklearn.base import clone, is_classifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble._base import _set_random_states
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import cross_val_predict
-from sklearn.utils import check_random_state
-from sklearn.utils import _safe_indexing
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.utils import _safe_indexing, check_random_state
+from sklearn.utils._param_validation import HasMethods
 
-from ..base import BaseUnderSampler
 from ...utils import Substitution
-from ...utils._docstring import _n_jobs_docstring
-from ...utils._docstring import _random_state_docstring
-from ...utils._validation import _deprecate_positional_args
+from ...utils._docstring import _n_jobs_docstring, _random_state_docstring
+from ..base import BaseUnderSampler
 
 
 @Substitution(
@@ -38,13 +35,8 @@ class InstanceHardnessThreshold(BaseUnderSampler):
     Parameters
     ----------
     estimator : estimator object, default=None
-        Classifier to be used to estimate instance hardness of the samples.  By
-        default a :class:`~sklearn.ensemble.RandomForestClassifier` will be
-        used. If ``str``, the choices using a string are the following:
-        ``'knn'``, ``'decision-tree'``, ``'random-forest'``, ``'adaboost'``,
-        ``'gradient-boosting'`` and ``'linear-svm'``.  If object, an estimator
-        inherited from :class:`~sklearn.base.ClassifierMixin` and having an
-        attribute :func:`predict_proba`.
+        Classifier to be used to estimate instance hardness of the samples.
+        This classifier should implement `predict_proba`.
 
     {sampling_strategy}
 
@@ -59,7 +51,7 @@ class InstanceHardnessThreshold(BaseUnderSampler):
     ----------
     sampling_strategy_ : dict
         Dictionary containing the information to sample the dataset. The keys
-        corresponds to the class labels from which to sample and the values
+        correspond to the class labels from which to sample and the values
         are the number of samples to sample.
 
     estimator_ : estimator object
@@ -75,6 +67,12 @@ class InstanceHardnessThreshold(BaseUnderSampler):
 
         .. versionadded:: 0.9
 
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.10
+
     See Also
     --------
     NearMiss : Undersample based on near-miss search.
@@ -85,8 +83,9 @@ class InstanceHardnessThreshold(BaseUnderSampler):
     -----
     The method is based on [1]_.
 
-    Supports multi-class resampling. A one-vs.-rest scheme is used when
-    sampling a class as proposed in [1]_.
+    Supports multi-class resampling: from each class to be under-sampled, it
+    retains the observations with the highest probability of being correctly
+    classified.
 
     References
     ----------
@@ -106,11 +105,21 @@ class InstanceHardnessThreshold(BaseUnderSampler):
     Original dataset shape Counter({{1: 900, 0: 100}})
     >>> iht = InstanceHardnessThreshold(random_state=42)
     >>> X_res, y_res = iht.fit_resample(X, y)
-    >>> print('Resampled dataset shape %s' % Counter(y_res))  # doctest: +ELLIPSIS
+    >>> print('Resampled dataset shape %s' % Counter(y_res))
     Resampled dataset shape Counter({{1: 5..., 0: 100}})
     """
 
-    @_deprecate_positional_args
+    _parameter_constraints: dict = {
+        **BaseUnderSampler._parameter_constraints,
+        "estimator": [
+            HasMethods(["fit", "predict_proba"]),
+            None,
+        ],
+        "cv": ["cv_object"],
+        "n_jobs": [numbers.Integral, None],
+        "random_state": ["random_state"],
+    }
+
     def __init__(
         self,
         *,
@@ -131,7 +140,7 @@ class InstanceHardnessThreshold(BaseUnderSampler):
 
         if (
             self.estimator is not None
-            and isinstance(self.estimator, ClassifierMixin)
+            and is_classifier(self.estimator)
             and hasattr(self.estimator, "predict_proba")
         ):
             self.estimator_ = clone(self.estimator)
@@ -142,10 +151,6 @@ class InstanceHardnessThreshold(BaseUnderSampler):
                 n_estimators=100,
                 random_state=self.random_state,
                 n_jobs=self.n_jobs,
-            )
-        else:
-            raise ValueError(
-                f"Invalid parameter `estimator`. Got {type(self.estimator)}."
             )
 
     def _fit_resample(self, X, y):
@@ -197,3 +202,8 @@ class InstanceHardnessThreshold(BaseUnderSampler):
 
     def _more_tags(self):
         return {"sample_indices": True}
+
+    def __sklearn_tags__(self):
+        tags = super().__sklearn_tags__()
+        tags.sampler_tags.sample_indices = True
+        return tags

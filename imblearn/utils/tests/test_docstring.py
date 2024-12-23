@@ -3,11 +3,22 @@
 # Authors: Guillaume Lemaitre <g.lemaitre58@gmail.com>
 # License: MIT
 
+import sys
+import textwrap
+
 import pytest
 
 from imblearn.utils import Substitution
-from imblearn.utils._docstring import _random_state_docstring
-from imblearn.utils._docstring import _n_jobs_docstring
+from imblearn.utils._docstring import _n_jobs_docstring, _random_state_docstring
+
+
+def _dedent_docstring(docstring):
+    """Compatibility with Python 3.13+.
+
+    xref: https://github.com/python/cpython/issues/81283
+    """
+    return "\n".join([textwrap.dedent(line) for line in docstring.split("\n")])
+
 
 func_docstring = """A function.
 
@@ -56,6 +67,11 @@ class cls:
         self.param_2 = param_2
 
 
+if sys.version_info >= (3, 13):
+    func_docstring = _dedent_docstring(func_docstring)
+    cls_docstring = _dedent_docstring(cls_docstring)
+
+
 @pytest.mark.parametrize(
     "obj, obj_docstring", [(func, func_docstring), (cls, cls_docstring)]
 )
@@ -67,3 +83,17 @@ def test_docstring_inject(obj, obj_docstring):
 def test_docstring_template():
     assert "random_state" in _random_state_docstring
     assert "n_jobs" in _n_jobs_docstring
+
+
+def test_docstring_with_python_OO():
+    """Check that we don't raise a warning if the code is executed with -OO.
+
+    Non-regression test for:
+    https://github.com/scikit-learn-contrib/imbalanced-learn/issues/945
+    """
+    instance = cls(param_1="xxx", param_2="yyy")
+    instance.__doc__ = None  # simulate -OO
+
+    instance = Substitution(param_1="xxx", param_2="yyy")(instance)
+
+    assert instance.__doc__ is None

@@ -1,18 +1,25 @@
+import copy
+import numbers
+import warnings
 from copy import deepcopy
 
 import numpy as np
-
 from sklearn.base import clone
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.ensemble._base import _set_random_states
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.utils import _safe_indexing
+from sklearn.utils._param_validation import Hidden, Interval, StrOptions
+from sklearn.utils.fixes import parse_version
+from sklearn.utils.validation import has_fit_parameter
 
-from ..under_sampling.base import BaseUnderSampler
-from ..under_sampling import RandomUnderSampler
 from ..pipeline import make_pipeline
+from ..under_sampling import RandomUnderSampler
+from ..under_sampling.base import BaseUnderSampler
 from ..utils import Substitution, check_target_type
 from ..utils._docstring import _random_state_docstring
-from ..utils._validation import _deprecate_positional_args
+from ..utils._sklearn_compat import _fit_context, sklearn_version
+from ._common import _adaboost_classifier_parameter_constraints
 
 
 @Substitution(
@@ -31,11 +38,13 @@ class RUSBoostClassifier(AdaBoostClassifier):
 
     Parameters
     ----------
-    base_estimator : estimator object, default=None
+    estimator : estimator object, default=None
         The base estimator from which the boosted ensemble is built.
         Support for sample weighting is required, as well as proper
         ``classes_`` and ``n_classes_`` attributes. If ``None``, then
         the base estimator is ``DecisionTreeClassifier(max_depth=1)``.
+
+        .. versionadded:: 0.12
 
     n_estimators : int, default=50
         The maximum number of estimators at which boosting is terminated.
@@ -53,6 +62,10 @@ class RUSBoostClassifier(AdaBoostClassifier):
         The SAMME.R algorithm typically converges faster than SAMME,
         achieving a lower test error with fewer boosting iterations.
 
+        .. deprecated:: 0.12
+            `"SAMME.R"` is deprecated and will be removed in version 0.14.
+            '"SAMME"' will become the default.
+
     {sampling_strategy}
 
     replacement : bool, default=False
@@ -62,8 +75,10 @@ class RUSBoostClassifier(AdaBoostClassifier):
 
     Attributes
     ----------
-    base_estimator_ : estimator
+    estimator_ : estimator
         The base estimator from which the ensemble is grown.
+
+        .. versionadded:: 0.10
 
     estimators_ : list of classifiers
         The collection of fitted sub-estimators.
@@ -98,6 +113,12 @@ class RUSBoostClassifier(AdaBoostClassifier):
 
         .. versionadded:: 0.9
 
+    feature_names_in_ : ndarray of shape (`n_features_in_`,)
+        Names of features seen during `fit`. Defined only when `X` has feature
+        names that are all strings.
+
+        .. versionadded:: 0.9
+
     See Also
     --------
     BalancedBaggingClassifier : Bagging classifier for which each base
@@ -125,34 +146,63 @@ class RUSBoostClassifier(AdaBoostClassifier):
     ...                            n_informative=4, weights=[0.2, 0.3, 0.5],
     ...                            random_state=0)
     >>> clf = RUSBoostClassifier(random_state=0)
-    >>> clf.fit(X, y)  # doctest: +ELLIPSIS
+    >>> clf.fit(X, y)
     RUSBoostClassifier(...)
-    >>> clf.predict(X)  # doctest: +ELLIPSIS
+    >>> clf.predict(X)
     array([...])
     """
 
-    @_deprecate_positional_args
+    # make a deepcopy to not modify the original dictionary
+    if sklearn_version >= parse_version("1.4"):
+        _parameter_constraints = copy.deepcopy(
+            AdaBoostClassifier._parameter_constraints
+        )
+    else:
+        _parameter_constraints = copy.deepcopy(
+            _adaboost_classifier_parameter_constraints
+        )
+
+    _parameter_constraints.update(
+        {
+            "algorithm": [
+                StrOptions({"SAMME", "SAMME.R"}),
+                Hidden(StrOptions({"deprecated"})),
+            ],
+            "sampling_strategy": [
+                Interval(numbers.Real, 0, 1, closed="right"),
+                StrOptions({"auto", "majority", "not minority", "not majority", "all"}),
+                dict,
+                callable,
+            ],
+            "replacement": ["boolean"],
+        }
+    )
+    # TODO: remove when minimum supported version of scikit-learn is 1.4
+    if "base_estimator" in _parameter_constraints:
+        del _parameter_constraints["base_estimator"]
+
     def __init__(
         self,
-        base_estimator=None,
+        estimator=None,
         *,
         n_estimators=50,
         learning_rate=1.0,
-        algorithm="SAMME.R",
+        algorithm="deprecated",
         sampling_strategy="auto",
         replacement=False,
         random_state=None,
     ):
         super().__init__(
-            base_estimator=base_estimator,
             n_estimators=n_estimators,
             learning_rate=learning_rate,
-            algorithm=algorithm,
             random_state=random_state,
         )
+        self.algorithm = algorithm
+        self.estimator = estimator
         self.sampling_strategy = sampling_strategy
         self.replacement = replacement
 
+    @_fit_context(prefer_skip_nested_validation=False)
     def fit(self, X, y, sample_weight=None):
         """Build a boosted classifier from the training set (X, y).
 
@@ -174,6 +224,7 @@ class RUSBoostClassifier(AdaBoostClassifier):
         self : object
             Returns self.
         """
+        self._validate_params()
         check_target_type(y)
         self.samplers_ = []
         self.pipelines_ = []
@@ -181,9 +232,30 @@ class RUSBoostClassifier(AdaBoostClassifier):
         return self
 
     def _validate_estimator(self):
-        """Check the estimator and the n_estimator attribute, set the
-        `base_estimator_` attribute."""
-        super()._validate_estimator()
+        """Check the estimator and the n_estimator attribute.
+
+        Sets the `estimator_` attributes.
+        """
+        default = DecisionTreeClassifier(max_depth=1)
+        if self.estimator is not None:
+            self.estimator_ = clone(self.estimator)
+        else:
+            self.estimator_ = clone(default)
+
+        #  SAMME-R requires predict_proba-enabled estimators
+        if self.algorithm == "SAMME.R":
+            if not hasattr(self.estimator_, "predict_proba"):
+                raise TypeError(
+                    "AdaBoostClassifier with algorithm='SAMME.R' requires "
+                    "that the weak learner supports the calculation of class "
+                    "probabilities with a predict_proba method.\n"
+                    "Please change the base estimator or set "
+                    "algorithm='SAMME' instead."
+                )
+        if not has_fit_parameter(self.estimator_, "sample_weight"):
+            raise ValueError(
+                f"{self.estimator_.__class__.__name__} doesn't support sample_weight."
+            )
 
         self.base_sampler_ = RandomUnderSampler(
             sampling_strategy=self.sampling_strategy,
@@ -195,7 +267,7 @@ class RUSBoostClassifier(AdaBoostClassifier):
         Warning: This method should be used to properly instantiate new
         sub-estimators.
         """
-        estimator = clone(self.base_estimator_)
+        estimator = clone(self.estimator_)
         estimator.set_params(**{p: getattr(self, p) for p in self.estimator_params})
         sampler = clone(self.base_sampler_)
 
@@ -323,3 +395,19 @@ class RUSBoostClassifier(AdaBoostClassifier):
             sample_weight *= np.exp(estimator_weight * incorrect * (sample_weight > 0))
 
         return sample_weight, estimator_weight, estimator_error
+
+    # TODO(0.14): remove this method because algorithm is deprecated.
+    def _boost(self, iboost, X, y, sample_weight, random_state):
+        if self.algorithm != "deprecated":
+            warnings.warn(
+                (
+                    "`algorithm` parameter is deprecated in 0.12 and will be removed in"
+                    " 0.14. In the future, the SAMME algorithm will always be used."
+                ),
+                FutureWarning,
+            )
+        if self.algorithm == "SAMME.R":
+            return self._boost_real(iboost, X, y, sample_weight, random_state)
+
+        else:  # elif self.algorithm == "SAMME":
+            return self._boost_discrete(iboost, X, y, sample_weight, random_state)

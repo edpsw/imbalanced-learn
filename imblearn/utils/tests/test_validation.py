@@ -3,22 +3,26 @@
 #          Christos Aridas
 # License: MIT
 
-from collections import Counter
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 
-import pytest
 import numpy as np
-
-from sklearn.neighbors._base import KNeighborsMixin
+import pytest
+from sklearn.cluster import KMeans
 from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors._base import KNeighborsMixin
 from sklearn.utils._testing import assert_array_equal
 
-from imblearn.utils.testing import warns
-from imblearn.utils import check_neighbors_object
-from imblearn.utils import check_sampling_strategy
-from imblearn.utils import check_target_type
-from imblearn.utils._validation import ArraysTransformer
-from imblearn.utils._validation import _deprecate_positional_args
+from imblearn.utils import (
+    check_neighbors_object,
+    check_sampling_strategy,
+    check_target_type,
+)
+from imblearn.utils._validation import (
+    ArraysTransformer,
+    _deprecate_positional_args,
+    _is_neighbors_object,
+)
+from imblearn.utils.testing import _CustomNearestNeighbors
 
 multiclass_target = np.array([1] * 50 + [2] * 100 + [3] * 25)
 binary_target = np.array([1] * 25 + [0] * 100)
@@ -36,9 +40,9 @@ def test_check_neighbors_object():
     estimator = NearestNeighbors(n_neighbors=n_neighbors)
     estimator_cloned = check_neighbors_object(name, estimator)
     assert estimator.n_neighbors == estimator_cloned.n_neighbors
-    n_neighbors = "rnd"
-    with pytest.raises(ValueError, match="has to be one of"):
-        check_neighbors_object(name, n_neighbors)
+    estimator = _CustomNearestNeighbors()
+    estimator_cloned = check_neighbors_object(name, estimator)
+    assert isinstance(estimator_cloned, _CustomNearestNeighbors)
 
 
 @pytest.mark.parametrize(
@@ -129,7 +133,7 @@ def test_check_sampling_strategy_error_wrong_string(
 ):
     with pytest.raises(
         ValueError,
-        match=("'{}' cannot be used with {}".format(sampling_strategy, err_msg)),
+        match="'{}' cannot be used with {}".format(sampling_strategy, err_msg),
     ):
         check_sampling_strategy(sampling_strategy, np.array([1, 2, 3]), sampling_type)
 
@@ -252,18 +256,6 @@ def test_check_sampling_strategy(
     assert sampling_strategy_ == expected_sampling_strategy
 
 
-def test_sampling_strategy_dict_over_sampling():
-    y = np.array([1] * 50 + [2] * 100 + [3] * 25)
-    sampling_strategy = {1: 70, 2: 140, 3: 70}
-    expected_msg = (
-        r"After over-sampling, the number of samples \(140\) in"
-        r" class 2 will be larger than the number of samples in"
-        r" the majority class \(class #2 -> 100\)"
-    )
-    with warns(UserWarning, expected_msg):
-        check_sampling_strategy(sampling_strategy, y, "over-sampling")
-
-
 def test_sampling_strategy_callable_args():
     y = np.array([1] * 50 + [2] * 100 + [3] * 25)
     multiplier = {1: 1.5, 2: 1, 3: 3}
@@ -381,3 +373,10 @@ def test_deprecate_positional_args_warns_for_function():
 
     with pytest.warns(FutureWarning, match=r"Pass b=2 as keyword args"):
         f3(1, 2)
+
+
+@pytest.mark.parametrize(
+    "estimator, is_neighbor_estimator", [(NearestNeighbors(), True), (KMeans(), False)]
+)
+def test_is_neighbors_object(estimator, is_neighbor_estimator):
+    assert _is_neighbors_object(estimator) == is_neighbor_estimator
